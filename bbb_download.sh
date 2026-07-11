@@ -110,14 +110,15 @@ boundaries="$(grep -oE '<image[^>]*>' shapes.svg | \
 
 {
   echo "# PHASE 1 terminée. AJUSTEZ les colonnes DEBUT et FIN (format H:MM:SS ou secondes)."
-  echo "# Le NUM nomme les sorties (dossier resolve_clips/NUM). Les lignes # sont ignorées."
+  echo "# NOM = nom du présentateur (bandeau en bas à gauche de la vidéo finale) — à remplir."
+  echo "# Le NUM nomme les sorties (dossier output/NUM). Les lignes # sont ignorées."
   echo "# SCINDER une présentation en plusieurs clips : ajoutez une ligne avec un NUM"
   echo "#   unique (ex: 05b) et une sous-plage DEBUT/FIN. Les diapos sont choisies"
   echo "#   automatiquement selon la plage horaire (gardez la coupe dans une seule"
   echo "#   présentation d'origine)."
   echo "# PHASE 2 : ./bbb_make_clips.sh <dossier> encode [NUM...]  (ex: ... encode 5 6)"
   echo "#"
-  printf '# %-4s| %-9s| %-9s| %s\n' "NUM" "DEBUT" "FIN" "INFO"
+  printf '# %-4s| %-9s| %-9s| %-20s| %s\n' "NUM" "DEBUT" "FIN" "NOM" "INFO"
   i=0
   while read -r pid s e; do
     i=$((i+1))
@@ -126,7 +127,7 @@ boundaries="$(grep -oE '<image[^>]*>' shapes.svg | \
       (if ($v|type)=="object" then ($v|to_entries[0].value)
        elif ($v|type)=="array" then $v[0] else "" end) as $t |
       "\($n) diapos — \(($t|tostring)|gsub("[\\n\\r]+";" ")|.[0:45])"' presentation_text.json)"
-    printf '%-6s| %-9s| %-9s| %s\n' "$(printf '%02d' "$i")" "$(hms "$s")" "$(hms "$e")" "$label"
+    printf '%-6s| %-9s| %-9s| %-20s| %s\n' "$(printf '%02d' "$i")" "$(hms "$s")" "$(hms "$e")" "" "$label"
   done <<< "$boundaries"
 } > presentations_cut.txt
 fi

@@ -1,30 +1,35 @@
 # Découpe des enregistrements BigBlueButton
 
 Outils pour transformer un enregistrement BigBlueButton (BBB) — une longue
-session unique — en **clips par présentation** prêts à monter dans votre
-logiciel de montage vidéo.
+session unique — en **clips par présentation**, puis, si on le souhaite, en
+**vidéo finale composée** (fond + diapos/deskshare + caméras isolées + nom +
+logo) selon un [gabarit 1920×1080][gabarit].
 
-Pour chaque présentation, on obtient trois pistes **alignées sur la même
+[gabarit]: https://claude.ai/code/artifact/0d9616f0-de4b-4538-ba85-97faa8e9ea14
+
+Pour chaque présentation, la phase 2 produit des pistes **alignées sur la même
 fenêtre de temps** :
 
-- `webcam.mp4` — caméra + audio
+- `webcam.mp4` — grille des caméras + audio
 - `deskshare.mp4` — partage d'écran (s'il y en a eu)
 - `slides.mp4` — les diapos, chacune affichée au moment où elle l'était en direct
 
-Déposées au même point sur la timeline de montage, les trois pistes se
-superposent automatiquement : à vous de choisir la mise en page finale.
+Déposées au même point sur une timeline, elles se superposent automatiquement —
+et la phase 3 les assemble pour vous selon le gabarit.
 
 ## Prérequis
 
 ```bash
 brew install ffmpeg resvg jq
+pip3 install numpy pillow      # phases 2b et 3 (détection caméras + composition)
 ```
 
-(`ffmpeg`/`ffprobe`, `resvg`, `jq`, plus `curl` déjà présent sur macOS.
-`resvg` rend les diapos SVG plus fidèlement que `rsvg-convert`, qui ignore les
-fonds à très grandes coordonnées des SVG BBB issus de PDF.)
+(`ffmpeg`/`ffprobe`, `resvg`, `jq`, `python3` + `numpy`/`pillow`, plus `curl`
+déjà présent sur macOS. `resvg` rend les diapos SVG plus fidèlement que
+`rsvg-convert`, qui ignore les fonds à très grandes coordonnées des SVG BBB
+issus de PDF.)
 
-## Flux de travail en 2 phases
+## Flux de travail par phases
 
 ### PHASE 1 — Tout télécharger
 
@@ -63,14 +68,16 @@ Ouvrez `<dossier>/presentations_cut.txt` et ajustez les colonnes `DEBUT` et
 de départ sont détectées automatiquement à partir de `shapes.svg`.
 
 ```
-# NUM | DEBUT    | FIN      | INFO
-1     | 0:00:00  | 0:07:36  | 28 diapos — Bienvenue aux...
-2     | 0:07:36  | 0:25:16  | 3 diapos — L'objection-sociocratique...
+# NUM | DEBUT    | FIN      | NOM                  | INFO
+01    | 0:00:00  | 0:07:36  |                      | 28 diapos — Bienvenue aux...
+02    | 0:07:36  | 0:25:16  | Jérémy Viau-Trudel   | 3 diapos — L'objection-sociocratique...
 ```
 
 Le `NUM` nomme les sorties : clips `output/NUM/` et sélection en phase 2
 (`... encode 01 03`). Les diapos, elles, restent dans les dossiers d'origine
-`01/`…`05/` (une par présentation détectée).
+`01/`…`05/` (une par présentation détectée). La colonne **`NOM`** (facultative)
+est le nom du présentateur, affiché en bas à gauche de la vidéo composée (phase
+3) ; vide = pas de bandeau.
 
 #### Scinder une présentation en plusieurs clips
 
@@ -80,9 +87,9 @@ ajoutez simplement une ligne avec un **NUM unique** et une **sous-plage**
 sont automatiquement tirées de la présentation d'origine que recouvre la plage.
 
 ```
-# NUM | DEBUT    | FIN      | INFO
-05a   | 1:38:26  | 2:05:00  | Exposé A
-05b   | 2:05:00  | 2:38:03  | Exposé B
+# NUM | DEBUT    | FIN      | NOM        | INFO
+05a   | 1:38:26  | 2:05:00  | Alice      | Exposé A
+05b   | 2:05:00  | 2:38:03  | Bob        | Exposé B
 ```
 
 → produit `output/05a/` et `output/05b/`, chacun avec les diapos de
@@ -123,12 +130,49 @@ output/
 Relancer une présentation ne met à jour que son dossier et sa ligne dans
 `manifest.txt` ; les autres ne sont pas touchées.
 
+### PHASE 2b — Isoler les caméras (optionnel)
+
+BBB fusionne toutes les webcams en une grille dans `webcam.mp4`, sans métadonnée
+de disposition. Pour en extraire des flux caméra séparés :
+
+```bash
+./bbb_split_webcams.sh <dossier> NUM...      # ex : ... 2026-07-07 02
+```
+
+- Détection par image : boîte de contenu sur le fond blanc + coupures aux
+  divisions égales de la grille (chute de corrélation), plages de disposition
+  stable segmentées, chaque caméra active découpée.
+- Sortie : `output/NN/webcams/segSSSs_camK-of-N.mp4` (**max 3 caméras**, ratio de
+  cellule conservé). `STEP=<s>` change le pas d'échantillonnage (défaut 4 s).
+
+### PHASE 3 — Composer la vidéo finale (optionnel)
+
+```bash
+./bbb_compose.sh <dossier> NUM...            # ex : ... 2026-07-07 02
+```
+
+Assemble, par présentation, la vidéo finale selon le [gabarit][gabarit] :
+
+- **carton d'intro** (`output/NN/intro.jpeg`, sinon généré) pendant 4 s ;
+- **fond** `assets/blue-background.png` ;
+- **contenu** : `slides.mp4` (remplacé par `deskshare.mp4` pendant un partage) ;
+- **caméras** isolées (phase 2b) dans des emplacements fixes 16:9 avec ombre
+  portée, affichées seulement quand elles ont une image ;
+- **nom** du présentateur (colonne `NOM`) en bas à gauche ;
+- **logo** `assets/Tux-FleurDeLys-…png` en bas à droite.
+
+Sortie : **`output/NN/final.mp4`** (1920×1080, H.264, 30 fps, MP4).
+`COMPOSE_LIMIT=<s>` pour un rendu d'essai court. Les assets (fond, logo) doivent
+être dans `assets/`.
+
 ## Scripts
 
 | Script | Rôle |
 |--------|------|
 | `bbb_download.sh` | **Phase 1** : télécharge tout + génère `presentations_cut.txt`. |
 | `bbb_make_clips.sh` | **Phase 2** : génère les clips alignés par présentation (webcam / deskshare / slides). |
+| `bbb_split_webcams.sh` | **Phase 2b** : isole les caméras de `webcam.mp4` par détection d'image. |
+| `bbb_compose.sh` | **Phase 3** : compose la vidéo finale (fond + contenu + caméras + nom + logo). |
 
 ## Données locales
 
@@ -137,10 +181,14 @@ les scripts reste **local** (voir `.gitignore`) :
 
 - les dossiers d'enregistrement datés (`2026-07-07/`…) avec `webcams.mp4`,
   `deskshare.mp4`, les diapos, les métadonnées et `presentations_cut.txt` ;
-- les clips générés dans `output/`.
+- les clips et la vidéo finale (`final.mp4`) générés dans `output/`.
 
 Chaque enregistrement se retélécharge avec `bbb_download.sh` et se régénère avec
-`bbb_make_clips.sh` : rien de tout cela n'a besoin d'être commité.
+les phases suivantes : rien de tout cela n'a besoin d'être commité.
+
+Les assets de composition (`assets/blue-background.png`, le logo et les
+`output/NN/intro.jpeg`) doivent être présents localement pour la phase 3 ; ils
+sont ignorés par défaut — ajoutez-les au dépôt si vous le voulez autonome.
 
 ## Notes techniques
 
@@ -155,3 +203,8 @@ Chaque enregistrement se retélécharge avec `bbb_download.sh` et se régénère
   partage d'écran, la dernière diapo est maintenue. `resvg` est utilisé plutôt
   que `rsvg-convert` car ce dernier ignore les fonds/tracés à très grandes
   coordonnées des SVG BBB issus de PDF (fond de diapo manquant).
+- **Caméras isolées (phase 2b)** : `webcam.mp4` est une grille composée par BBB,
+  sans métadonnée de disposition. La détection repère la boîte de contenu (fond
+  blanc), puis les coupures aux divisions égales de la grille via la chute de
+  corrélation entre colonnes/rangées adjacentes (moyennée dans le temps pour
+  résister au bruit), segmente les dispositions stables et recadre chaque tuile.

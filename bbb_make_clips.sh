@@ -156,7 +156,7 @@ mkdir -p output
 log "Mode: $mode"
 [ -n "${wanted// /}" ] && log "Présentations demandées:${wanted}" || log "Présentations: toutes"
 
-while IFS='|' read -r num start end info; do
+while IFS='|' read -r num start end nom info; do
   num="$(trim "$num")"
   [ -z "$num" ] && continue
   case "$num" in \#*) continue;; esac
@@ -167,7 +167,7 @@ while IFS='|' read -r num start end info; do
     [[ "$num" =~ ^[0-9]+$ ]] && [[ "$wanted" == *" $((10#$num)) "* ]] && _m=1
     [ "$_m" = "1" ] || continue
   fi
-  start="$(trim "$start")"; end="$(trim "$end")"; info="$(trim "$info")"
+  start="$(trim "$start")"; end="$(trim "$end")"; info="$(trim "$info")"   # nom : utilisé en phase 3
 
   ss="$(to_sec "$start")"; ee="$(to_sec "$end")"
   dur="$(awk -v a="$ss" -v b="$ee" 'BEGIN{printf "%.3f", b-a}')"
