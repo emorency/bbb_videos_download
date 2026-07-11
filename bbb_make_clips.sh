@@ -149,10 +149,12 @@ build_slides() {  # <id> <slidedir> <ss> <ee> <out>
   rm -rf "$st"
 }
 
+log() { echo "[$(date +%H:%M:%S)] $*"; }
+
 mkdir -p output
 [ -f output/manifest.txt ] || : > output/manifest.txt
-echo "Mode: $mode"
-[ -n "${wanted// /}" ] && echo "Présentations demandées:${wanted}" || echo "Présentations: toutes"
+log "Mode: $mode"
+[ -n "${wanted// /}" ] && log "Présentations demandées:${wanted}" || log "Présentations: toutes"
 
 while IFS='|' read -r num start end info; do
   num="$(trim "$num")"
@@ -172,8 +174,12 @@ while IFS='|' read -r num start end info; do
   nn="$num"                       # le NUM sert de nom de dossier de sortie
   outdir="output/${nn}"
   mkdir -p "$outdir"
+  log "=== Présentation ${nn}  ${start}–${end}  (${info}) ==="
 
+  log "  webcam.mp4 … (${dur%.*}s de source)"
+  t0=$SECONDS
   cut_video webcams.mp4 "$ss" "$dur" "$outdir/webcam.mp4"
+  log "  webcam.mp4 ✓ ($((SECONDS-t0))s)"
   ds_txt="webcam seulement"
 
   if [ "$have_deskshare" = "1" ]; then
@@ -184,7 +190,10 @@ while IFS='|' read -r num start end info; do
       [ "$o" = "1" ] && overlap=1
     done <<< "$deskshare_events"
     if [ "$overlap" = "1" ]; then
+      log "  deskshare.mp4 …"
+      t0=$SECONDS
       cut_video deskshare.mp4 "$ss" "$dur" "$outdir/deskshare.mp4"
+      log "  deskshare.mp4 ✓ ($((SECONDS-t0))s)"
       ds_txt="webcam + deskshare"
     fi
   fi
@@ -194,7 +203,10 @@ while IFS='|' read -r num start end info; do
   if [ "$have_shapes" = "1" ]; then
     src="$(find_src "$ss" "$ee")"
     if [ -n "$src" ]; then
+      log "  slides.mp4 … (diapos P${src})"
+      t0=$SECONDS
       if build_slides "${orig_id[$src]}" "$(printf '%02d' "$src")" "$ss" "$ee" "$outdir/slides.mp4"; then
+        log "  slides.mp4 ✓ ($((SECONDS-t0))s)"
         ds_txt="$ds_txt + slides"; src_txt="  (diapos P${src})"
       fi
     fi
@@ -205,8 +217,8 @@ while IFS='|' read -r num start end info; do
   printf '%s\n' "$line" >> output/manifest.tmp
   sort output/manifest.tmp -o output/manifest.txt
   rm -f output/manifest.tmp
-  echo "$line"
+  log "  ✓ Présentation ${nn} terminée [${ds_txt}]"
 done < "$cutfile"
 
 echo
-echo "Clips prêts dans output/ (voir manifest.txt)."
+log "Terminé en ${SECONDS}s. Clips dans output/ (voir manifest.txt)."

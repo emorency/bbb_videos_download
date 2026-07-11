@@ -94,9 +94,9 @@ présentation d'origine pour que les diapos soient correctes.)
 ```bash
 ./bbb_make_clips.sh <dossier> [encode|copy] [NUM...]
 # ex :
-./bbb_make_clips.sh 07-Jun-2026 encode 3        # seulement la présentation 3
-./bbb_make_clips.sh 07-Jun-2026 encode 1 3 5    # quelques-unes
-./bbb_make_clips.sh 07-Jun-2026 encode          # toutes
+./bbb_make_clips.sh 2026-07-07 encode 3        # seulement la présentation 3
+./bbb_make_clips.sh 2026-07-07 encode 1 3 5    # quelques-unes
+./bbb_make_clips.sh 2026-07-07 encode          # toutes
 ```
 
 - **`encode`** (défaut) : bornes exactes et pistes parfaitement alignées
@@ -117,7 +117,7 @@ output/
 │   └── slides.mp4
 ├── 02/
 │   └── ...
-└── manifest.txt           (numéro → horaires → titre → id)
+└── manifest.txt           (numéro → horaires → pistes → info)
 ```
 
 Relancer une présentation ne met à jour que son dossier et sa ligne dans
@@ -129,6 +129,18 @@ Relancer une présentation ne met à jour que son dossier et sa ligne dans
 |--------|------|
 | `bbb_download.sh` | **Phase 1** : télécharge tout + génère `presentations_cut.txt`. |
 | `bbb_make_clips.sh` | **Phase 2** : génère les clips alignés par présentation (webcam / deskshare / slides). |
+
+## Données locales
+
+Le dépôt ne versionne que les scripts et cette doc. Tout le contenu produit par
+les scripts reste **local** (voir `.gitignore`) :
+
+- les dossiers d'enregistrement datés (`2026-07-07/`…) avec `webcams.mp4`,
+  `deskshare.mp4`, les diapos, les métadonnées et `presentations_cut.txt` ;
+- les clips générés dans `output/`.
+
+Chaque enregistrement se retélécharge avec `bbb_download.sh` et se régénère avec
+`bbb_make_clips.sh` : rien de tout cela n'a besoin d'être commité.
 
 ## Notes techniques
 
