@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# PHASE 2 — Génère les clips par présentation à importer dans DaVinci Resolve,
-# à partir des points de coupe édités dans presentations_cut.txt.
+# PHASE 2 — Génère les clips par présentation à importer dans un logiciel de
+# montage vidéo, à partir des points de coupe édités dans presentations_cut.txt.
 #
 # Pour chaque ligne (NUM) de presentations_cut.txt :
 #   output/NUM/webcam.mp4     (caméra + audio)
 #   output/NUM/deskshare.mp4  (partage d'écran, si présent)
 #   output/NUM/slides.mp4     (diapos rendues sur la timeline shapes.svg)
-# Les trois couvrent EXACTEMENT la même fenêtre [DEBUT, FIN] : déposés dans
-# Resolve au même point, ils sont alignés (deskshare est noir là où personne ne
-# partageait ; le clip diapos affiche chaque diapo au moment où elle était à
-# l'écran).
+# Les trois couvrent EXACTEMENT la même fenêtre [DEBUT, FIN] : déposés sur la
+# timeline de montage au même point, ils sont alignés (deskshare est noir là où
+# personne ne partageait ; le clip diapos affiche chaque diapo au moment où elle
+# était à l'écran).
 #
 # SCINDER une présentation : webcam et deskshare sont coupés PAR LE TEMPS, donc
 # il suffit d'ajouter une ligne dans presentations_cut.txt avec un NUM unique et

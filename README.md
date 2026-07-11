@@ -1,8 +1,8 @@
 # Découpe des enregistrements BigBlueButton
 
 Outils pour transformer un enregistrement BigBlueButton (BBB) — une longue
-session unique — en **clips par présentation** prêts à monter dans DaVinci
-Resolve.
+session unique — en **clips par présentation** prêts à monter dans votre
+logiciel de montage vidéo.
 
 Pour chaque présentation, on obtient trois pistes **alignées sur la même
 fenêtre de temps** :
@@ -11,7 +11,7 @@ fenêtre de temps** :
 - `deskshare.mp4` — partage d'écran (s'il y en a eu)
 - `slides.mp4` — les diapos, chacune affichée au moment où elle l'était en direct
 
-Déposées au même point sur la timeline Resolve, les trois pistes se
+Déposées au même point sur la timeline de montage, les trois pistes se
 superposent automatiquement : à vous de choisir la mise en page finale.
 
 ## Prérequis
@@ -30,7 +30,7 @@ fonds à très grandes coordonnées des SVG BBB issus de PDF.)
 
 ```bash
 # Le plus simple : juste l'ID d'enregistrement (la partie …-<timestamp>)
-./bbb_download.sh 0fd9362b0262e546caf2c07d030316c51f906692-1783457208252
+./bbb_download.sh <recording_id>
 #   -> dossier nommé automatiquement d'après la date (ex: 2026-07-07)
 
 # Ou l'URL complète, et/ou un dossier explicite

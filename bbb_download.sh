@@ -13,7 +13,7 @@
 #   On peut donner l'URL complète OU juste l'ID d'enregistrement (…-<timestamp>).
 #   Sans dossier, il est nommé d'après la date de l'enregistrement (ex: 2026-07-07).
 #   Hôte par défaut pour un ID seul : $BBB_HOST.
-#   ex: bbb_download.sh 0fd9362b0262e546caf2c07d030316c51f906692-1783457208252
+#   ex: bbb_download.sh <recording_id>
 #       bbb_download.sh "https://bbb3.services-conseils-linux.org/playback/presentation/2.3/<id>" 07-Jun-2026
 
 set -euo pipefail
