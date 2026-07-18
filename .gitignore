@@ -5,11 +5,13 @@
 # Tout ignorer par défaut...
 /*
 
-# ...sauf les fichiers du projet :
+# ...sauf les fichiers du projet (scripts + doc + assets).
+# Globs pour que tout nouveau script/doc soit versionné automatiquement.
 !/.gitignore
-!/README.md
-!/bbb_download.sh
-!/bbb_make_clips.sh
+!/*.md
+!/bbb_*.sh
+!/*.py
+!/assets/*
 
 # Filet de sécurité si des médias/outputs se retrouvaient hors d'un dossier daté
 output/

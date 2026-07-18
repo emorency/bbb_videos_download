@@ -7,12 +7,18 @@ logo) selon un [gabarit 1920×1080][gabarit].
 
 [gabarit]: https://claude.ai/code/artifact/0d9616f0-de4b-4538-ba85-97faa8e9ea14
 
+> **Pressé ?** [COOKBOOK.md](COOKBOOK.md) donne le parcours complet en cinq
+> commandes, les recettes par situation et un tableau de dépannage. Ce
+> README-ci détaille le pourquoi de chaque phase.
+
 Pour chaque présentation, la phase 2 produit des pistes **alignées sur la même
 fenêtre de temps** :
 
 - `webcam.mp4` — grille des caméras + audio
 - `deskshare.mp4` — partage d'écran (s'il y en a eu)
 - `slides.mp4` — les diapos, chacune affichée au moment où elle l'était en direct
+  (absent si le présentateur n'a pas utilisé les diapos BBB : un diaporama
+  montré à travers un partage d'écran ne produit pas de `slides.mp4`)
 
 Déposées au même point sur une timeline, elles se superposent automatiquement —
 et la phase 3 les assemble pour vous selon le gabarit.
@@ -22,6 +28,7 @@ et la phase 3 les assemble pour vous selon le gabarit.
 ```bash
 brew install ffmpeg resvg jq
 pip3 install numpy pillow      # phases 2b et 3 (détection caméras + composition)
+pip3 install google-api-python-client google-auth-oauthlib google-auth-httplib2  # upload YouTube
 ```
 
 (`ffmpeg`/`ffprobe`, `resvg`, `jq`, `python3` + `numpy`/`pillow`, plus `curl`
@@ -59,13 +66,61 @@ Cela télécharge dans `<dossier>` :
 - `NN/slideN.svg` (les diapos, un **dossier numéroté** — `01`, `02`… — par
   présentation, dans l'ordre de la session)
 
-puis génère **`presentations_cut.txt`**.
+puis génère **`presentations_cut.yaml`** (et `presentations_cut.txt` pour
+compatibilité).
 
 ### Éditer les points de coupe
 
-Ouvrez `<dossier>/presentations_cut.txt` et ajustez les colonnes `DEBUT` et
-`FIN` (format `H:MM:SS` ou secondes). Une présentation par ligne. Les valeurs
-de départ sont détectées automatiquement à partir de `shapes.svg`.
+Ouvrez `<dossier>/presentations_cut.yaml` et ajustez `start` et `end`
+(format `H:MM:SS` ou secondes). Une entrée par présentation. Les valeurs de
+départ sont détectées automatiquement à partir de `shapes.svg`.
+
+Le YAML généré en phase 1 inclut aussi des valeurs globales par défaut pour le
+naming (`brand`, `city`, `date`, `language`, `format`, `encoding`). La `date`
+est déduite du dossier d'enregistrement (ou du timestamp BBB), puis convertie en
+`YYYYMMDD`.
+
+Exemple YAML :
+
+```yaml
+brand: "RLQ"
+city: "MTL"
+date: "20260707"
+language: "FR"
+format: "1080p"
+encoding: "h264"
+
+presentations:
+  - num: "01"
+    start: "0:00:00"
+    end: "0:07:36"
+    presenter: "EtienneM_DenisF"
+    info: "28 diapos — Bienvenue aux..."
+    short_title: "Securisation_variables_environnement"
+    webcams_priority: [2, 1, 3]
+```
+
+`webcams_priority` est utilisé en **phase 3** pour choisir l'ordre des caméras
+dans les slots (haut, milieu, bas). Exemple `[2,1,3]` = cam2 en haut, cam1 au
+milieu, cam3 en bas.
+
+Nom de sortie (phase 3) :
+
+`RLQ-City-Date-short_title.presenter.language.format.encoding.mp4`
+
+En mode actuel de composition, `short_title` et `presenter` sont **obligatoires**
+pour chaque entrée : si l'un des deux est vide ou absent, `bbb_compose.sh`
+arrête avec une erreur explicite.
+
+Exemple :
+
+`RLQ-MTL-20260707-Securisation_variables_environnement.EtienneM_DenisF.FR.1080p.h264.mp4`
+
+Le `presenter` reste affiché en **nom complet** dans la vidéo, mais dans le
+nom de fichier il est converti en `Prenom` + initiale du dernier nom.
+Exemple : `Martial Bigras` devient `MartialB`.
+
+`presentations_cut.txt` reste accepté pour compatibilité.
 
 ```
 # NUM | DEBUT    | FIN      | NOM                  | INFO
@@ -73,23 +128,33 @@ de départ sont détectées automatiquement à partir de `shapes.svg`.
 02    | 0:07:36  | 0:25:16  | Jérémy Viau-Trudel   | 3 diapos — L'objection-sociocratique...
 ```
 
-Le `NUM` nomme les sorties : clips `output/NUM/` et sélection en phase 2
+Le `num` nomme les sorties : clips `output/NUM/` et sélection en phase 2
 (`... encode 01 03`). Les diapos, elles, restent dans les dossiers d'origine
-`01/`…`05/` (une par présentation détectée). La colonne **`NOM`** (facultative)
-est le nom du présentateur, affiché en bas à gauche de la vidéo composée (phase
-3) ; vide = pas de bandeau.
+`01/`…`05/` (une par présentation détectée). Le champ **`presenter`**
+(facultatif) est le nom du présentateur, affiché en bas à gauche de la vidéo
+composée (phase 3) ; vide = pas de bandeau.
 
 #### Scinder une présentation en plusieurs clips
 
 Si une « présentation » détectée contient en fait plusieurs exposés à séparer,
-ajoutez simplement une ligne avec un **NUM unique** et une **sous-plage**
-`DEBUT`/`FIN`. La webcam et le deskshare sont coupés par le temps, et les diapos
+ajoutez simplement une entrée avec un **num unique** et une **sous-plage**
+`start`/`end`. La webcam et le deskshare sont coupés par le temps, et les diapos
 sont automatiquement tirées de la présentation d'origine que recouvre la plage.
 
 ```
-# NUM | DEBUT    | FIN      | NOM        | INFO
-05a   | 1:38:26  | 2:05:00  | Alice      | Exposé A
-05b   | 2:05:00  | 2:38:03  | Bob        | Exposé B
+presentations:
+  - num: "05a"
+    start: "1:38:26"
+    end: "2:05:00"
+    presenter: "Alice"
+    info: "Exposé A"
+    webcams_priority: []
+  - num: "05b"
+    start: "2:05:00"
+    end: "2:38:03"
+    presenter: "Bob"
+    info: "Exposé B"
+    webcams_priority: []
 ```
 
 → produit `output/05a/` et `output/05b/`, chacun avec les diapos de
@@ -109,9 +174,18 @@ présentation d'origine pour que les diapos soient correctes.)
 - **`encode`** (défaut) : bornes exactes et pistes parfaitement alignées
   (réencodage matériel h264_videotoolbox). Meilleure qualité pour le montage.
 - **`copy`** : instantané et sans perte, mais les coupes s'alignent sur
-  l'image-clé la plus proche (±1–2 s) — les pistes peuvent être légèrement
-  décalées entre elles.
-- Les `NUM` correspondent à la colonne `NUM` de `presentations_cut.txt`.
+  l'image-clé la plus proche. Sur les enregistrements mesurés ici, les
+  images-clés sont espacées d'environ **10 s** : les bornes peuvent donc
+  déraper de plusieurs secondes et les pistes se décaler entre elles.
+  À vérifier sur un enregistrement donné :
+
+  ```bash
+  ffprobe -v error -select_streams v:0 -skip_frame nokey \
+    -show_entries frame=pts_time -of csv=p=0 -read_intervals "%+60" webcams.mp4
+  ```
+
+- Les `NUM` correspondent au champ `num` de `presentations_cut.yaml`
+  (ou à la colonne `NUM` du `.txt`).
   Sans liste, toutes les présentations sont traitées.
 
 Résultat dans `<dossier>/output/` :
@@ -121,11 +195,17 @@ output/
 ├── 01/
 │   ├── webcam.mp4
 │   ├── deskshare.mp4      (si partage d'écran)
-│   └── slides.mp4
+│   ├── slides.mp4
+│   └── window.txt         (fenêtre [start,end] utilisée — voir ci-dessous)
 ├── 02/
 │   └── ...
 └── manifest.txt           (numéro → horaires → pistes → info)
 ```
+
+`window.txt` mémorise la fenêtre de coupe employée. Si vous modifiez `start`/`end`
+dans le YAML sans régénérer les clips, la **phase 3 vous avertit** que les clips
+sont périmés et indique de relancer la phase 2 — c'est ce qui évite de composer
+une vidéo à partir de clips qui ne correspondent plus.
 
 Relancer une présentation ne met à jour que son dossier et sa ligne dans
 `manifest.txt` ; les autres ne sont pas touchées.
@@ -137,6 +217,13 @@ de disposition. Pour en extraire des flux caméra séparés :
 
 ```bash
 ./bbb_split_webcams.sh <dossier> NUM...      # ex : ... 2026-07-07 02
+
+# si la grille est connue (bypass de l'analyse auto)
+FORCE_GRID=2x2 FORCE_ACTIVE=1,2,3 ./bbb_split_webcams.sh <dossier> 01
+
+# si la grille change dans le clip, fournir un plan manuel
+# (ex: output/01/splits.txt peut être référencé par son nom court)
+MANUAL_PLAN=webcams_plan.txt ./bbb_split_webcams.sh <dossier> 01
 ```
 
 - Détection par image : boîte de contenu sur le fond blanc + coupures aux
@@ -144,6 +231,64 @@ de disposition. Pour en extraire des flux caméra séparés :
   stable segmentées, chaque caméra active découpée.
 - Sortie : `output/NN/webcams/segSSSs_camK-of-N.mp4` (**max 3 caméras**, ratio de
   cellule conservé). `STEP=<s>` change le pas d'échantillonnage (défaut 4 s).
+- `VERBOSE=1` affiche la progression détaillée.
+- `VIDEO_CODEC=libx264` permet de remplacer l'encodeur par défaut
+  `h264_videotoolbox` si l'encodeur matériel n'est pas disponible.
+- Si vous connaissez déjà la disposition, `FORCE_GRID=<C>x<R>` et
+  `FORCE_ACTIVE=...` permettent de **sauter l'analyse** (exemple : 2x2 avec
+  la dernière case vide -> `FORCE_GRID=2x2 FORCE_ACTIVE=1,2,3`).
+- Pour corriger manuellement les changements de grille, utilisez
+  `MANUAL_PLAN=<fichier>`. Format :
+
+```text
+# start end grid active [bbox]
+0:00  3:20  2x2  1,2,3
+3:20  end   3x2  1,3,4,5  0:0:1920:1080
+```
+
+`start`/`end` acceptent secondes, `MM:SS`, `HH:MM:SS` ou `end`. `active` liste
+les cellules ligne par ligne (`1..C*R`) ; utilisez `-` ou `all` pour toutes les
+cellules. `bbox` est optionnel et recadre la zone de grille (`x:y:w:h`).
+`MANUAL_PLAN=splits.txt` cherche aussi `output/NN/splits.txt`. Variante sans
+fichier : `MANUAL_SEGMENTS='0:00 3:20 2x2 1,2,3; 3:20 end 3x2 1,3,4,5'`.
+
+### Recut synchronisé d'une présentation
+
+Applique le **même découpage à toutes les pistes** d'une présentation
+(webcam/deskshare/slides/final) pour qu'elles restent alignées. Deux modes selon
+le nombre d'arguments.
+
+**Retirer les premières secondes** (glitch au début), 3 arguments :
+
+```bash
+./bbb_recut_sync.sh <dossier> <NUM> <start>
+./bbb_recut_sync.sh 2026-07-14 01 1          # retire la 1re seconde
+```
+
+**Retirer un segment au milieu** et raccorder l'avant et l'après, 4 arguments :
+
+```bash
+./bbb_recut_sync.sh <dossier> <NUM> <start> <end>
+./bbb_recut_sync.sh 2026-07-15 01 0:50:58 0:53:13   # coupe [50:58, 53:13]
+```
+
+- `start`/`end` acceptent secondes, `MM:SS` ou `H:MM:SS`. Le raccord est
+  réencodé, donc **net à l'image près** (pas de dépendance aux images-clés).
+- `XFADE=<s>` ajoute un **fondu enchaîné** (cross dissolve) au raccord du mode
+  milieu, vidéo et audio. Le fondu consomme `XFADE` s de part et d'autre de la
+  coupe (la vidéo est donc raccourcie d'autant en plus du segment retiré) ; il
+  est ignoré si une des deux parties est plus courte que `XFADE`.
+
+  ```bash
+  XFADE=0.5 ./bbb_recut_sync.sh 2026-07-15 01 0:50:58 0:53:13
+  ```
+
+- `DRY_RUN=1` affiche le plan (plages gardées, durée estimée) sans rien écrire.
+- Le sous-dossier `webcams/` est **exclu** : ces segments caméra ont une
+  timeline partielle et seraient désynchronisés. Après un recut, relancez la
+  phase 2b pour les régénérer depuis le `webcam.mp4` déjà coupé.
+- Le fichier final composé (`RLQ-…mp4`) est inclus s'il est présent ; sinon
+  recomposez (phase 3) après le recut.
 
 ### PHASE 3 — Composer la vidéo finale (optionnel)
 
@@ -153,26 +298,86 @@ de disposition. Pour en extraire des flux caméra séparés :
 
 Assemble, par présentation, la vidéo finale selon le [gabarit][gabarit] :
 
-- **carton d'intro** (`output/NN/intro.jpeg`, sinon généré) pendant 4 s ;
+- **carton d'intro** **superposé** de 0 à 4 s (la durée totale n'augmente pas,
+  l'audio démarre à t=0). L'image est cherchée dans cet ordre :
+  `output/NN/intro.{jpeg,jpg,png}` (propre à une présentation), puis
+  `<dossier>/intro.{jpeg,jpg,png}` (**commune à toute la session** — une seule
+  image suffit pour toutes les présentations), sinon un carton est **généré** à
+  partir du titre. `bbb_download_event_bg.sh` enregistre justement dans
+  `<dossier>/intro.jpg` ;
 - **fond** `assets/blue-background.png` ;
-- **contenu** : `slides.mp4` (remplacé par `deskshare.mp4` pendant un partage) ;
+- **contenu** de la zone principale : `slides.mp4` et/ou `deskshare.mp4` — le
+  partage d'écran s'affiche par-dessus les diapos pendant qu'il est actif.
+  **L'un des deux suffit** : une présentation sans diapos (partage d'écran
+  seulement) se compose normalement, et inversement ;
 - **caméras** isolées (phase 2b) dans des emplacements fixes 16:9 avec ombre
   portée, affichées seulement quand elles ont une image ;
 - **nom** du présentateur (colonne `NOM`) en bas à gauche ;
 - **logo** `assets/Tux-FleurDeLys-…png` en bas à droite.
 
-Sortie : **`output/NN/final.mp4`** (1920×1080, H.264, 30 fps, MP4).
-`COMPOSE_LIMIT=<s>` pour un rendu d'essai court. Les assets (fond, logo) doivent
-être dans `assets/`.
+Sortie : **`output/NN/RLQ-City-Date-short_title.presenter.language.format.encoding.mp4`**
+(1920×1080, H.264, 30 fps, MP4).
+`COMPOSE_LIMIT=<s>` pour un rendu d'essai court : il est écrit sous un nom
+distinct `…​.preview.mp4`, jamais confondu avec la vidéo finale. `PYTHON=<chemin>`
+impose un interpréteur (utile si le `python3` par défaut n'a pas Pillow). Les
+assets (fond, logo) doivent être dans `assets/`.
+
+### Tout-en-un : de l'ID à la vidéo finale (`bbb_all.sh`)
+
+Après avoir **visionné l'enregistrement et noté les points de coupe**, préparez
+un fichier de config (un `presentations_cut.yaml` : paramètres globaux +
+présentations avec `start`/`end`/`presenter`/`short_title`). `bbb_all.sh` fait
+alors **tout le pipeline** — téléchargement (phase 1) puis clips, caméras et
+composition (phases 2/2b/3) — pour toutes les présentations du config :
+
+```bash
+./bbb_all.sh <meeting_id | playback_url> <config.yaml> [NUM...]
+./bbb_all.sh 0fd9362b…-1784147446537 rlq-20260715.yaml
+```
+
+- Le **dossier de sortie** est déduit de la date de l'ID (comme `bbb_download.sh`).
+  Le config est installé comme `<dossier>/presentations_cut.yaml` ; un fichier de
+  coupe préexistant qui diffèrerait est **sauvegardé** (`.bak`) avant, jamais
+  écrasé en silence.
+- Sans `NUM`, **toutes** les présentations du config sont traitées ; sinon
+  seulement celles listées.
+- La seule étape manuelle reste le **repérage des coupes** : le config les porte,
+  le script fait le reste.
+- `MODE=copy` passe la phase 2 en copie ; `SKIP_SPLIT=1` saute la 2b (pas de
+  caméras isolées) ; `SKIP_COMPOSE=1` s'arrête après les clips. Les variables des
+  scripts sous-jacents (`PYTHON`, `BBB_HOST`, `BBB_VENC`, …) sont héritées.
 
 ## Scripts
 
 | Script | Rôle |
 |--------|------|
-| `bbb_download.sh` | **Phase 1** : télécharge tout + génère `presentations_cut.txt`. |
+| `bbb_all.sh` | Tout-en-un : télécharge (phase 1) puis clips/caméras/composition (2/2b/3) à partir d'un ID + un config de coupes. |
+| `bbb_download.sh` | **Phase 1** : télécharge tout + génère `presentations_cut.yaml` (et `.txt` de compatibilité). |
 | `bbb_make_clips.sh` | **Phase 2** : génère les clips alignés par présentation (webcam / deskshare / slides). |
 | `bbb_split_webcams.sh` | **Phase 2b** : isole les caméras de `webcam.mp4` par détection d'image. |
+| `bbb_recut_sync.sh` | Re-coupe toutes les pistes d'une présentation à l'identique (retrait tête ou segment milieu, fondu optionnel) ; synchro conservée. |
 | `bbb_compose.sh` | **Phase 3** : compose la vidéo finale (fond + contenu + caméras + nom + logo). |
+| `bbb_download_event_bg.sh` | Télécharge l'image de fond/bannière depuis une page d'événement (par défaut vers `YYYY-MM-DD/intro.jpg`). |
+| `bbb_upload_youtube.py` | Upload d'une vidéo locale vers YouTube (mode **private** par défaut, OAuth local). |
+
+### Upload YouTube (private)
+
+Préparez d'abord un client OAuth Desktop depuis Google Cloud (YouTube Data API
+v3 activée), puis placez le fichier JSON dans le dépôt sous :
+
+`youtube_client_secret.json`
+
+Commande typique (private par défaut) :
+
+```bash
+./bbb_upload_youtube.py 2026-07-14/output/01/RLQ-MTL-20260714-Bienvenue_RLQ.MartialB.FR.1080p.h264.mp4 \
+  --title "Rencontres Linux Quebec - Bienvenue" \
+  --description "Session RLQ" \
+  --privacy private
+```
+
+Au premier lancement, un navigateur s'ouvre pour l'autorisation Google. Un token
+est ensuite sauvegardé dans `~/.config/bbb_videos_download/youtube_token.json`.
 
 ## Données locales
 
@@ -181,14 +386,30 @@ les scripts reste **local** (voir `.gitignore`) :
 
 - les dossiers d'enregistrement datés (`2026-07-07/`…) avec `webcams.mp4`,
   `deskshare.mp4`, les diapos, les métadonnées et `presentations_cut.txt` ;
-- les clips et la vidéo finale (`final.mp4`) générés dans `output/`.
+- les clips et les vidéos finales générés dans `output/`.
 
 Chaque enregistrement se retélécharge avec `bbb_download.sh` et se régénère avec
 les phases suivantes : rien de tout cela n'a besoin d'être commité.
 
-Les assets de composition (`assets/blue-background.png`, le logo et les
-`output/NN/intro.jpeg`) doivent être présents localement pour la phase 3 ; ils
-sont ignorés par défaut — ajoutez-les au dépôt si vous le voulez autonome.
+Les assets de composition (`assets/blue-background.png`, le logo et l'intro
+`<dossier>/intro.jpg` — ou `output/NN/intro.*` pour une intro propre à une
+présentation) doivent être présents localement pour la phase 3 ; ils sont
+ignorés par défaut — ajoutez-les au dépôt si vous le voulez autonome. Sans image
+d'intro, un carton est généré automatiquement à partir du titre.
+
+Pour récupérer automatiquement une image de fond depuis une page d'événement
+Rencontres Linux Québec :
+
+```bash
+./bbb_download_event_bg.sh "https://www.rencontres-linux.quebec/en_CA/event/rencontre-linux-ville-de-quebec-14-juillet-2026-114/register"
+# -> enregistre par défaut dans 2026-07-14/intro.jpg
+
+# ou avec un fichier de sortie explicite
+./bbb_download_event_bg.sh "<url-evenement>" 2026-07-14/intro.jpg
+```
+
+Le script essaie d'abord `og:image`/`twitter:image`, puis un
+`background-image:url(...)`, puis des balises `<img>`.
 
 ## Notes techniques
 
@@ -203,6 +424,28 @@ sont ignorés par défaut — ajoutez-les au dépôt si vous le voulez autonome.
   partage d'écran, la dernière diapo est maintenue. `resvg` est utilisé plutôt
   que `rsvg-convert` car ce dernier ignore les fonds/tracés à très grandes
   coordonnées des SVG BBB issus de PDF (fond de diapo manquant).
+- **`slides.mp4` peut être plus court que le clip, c'est normal** : il ne
+  contient que les diapos BBB de `shapes.svg`. Si le présentateur a montré ses
+  diapos via un partage d'écran plutôt que par l'outil diapos de BBB, `shapes.svg`
+  a peu (ou pas) d'entrées, et le clip diapos ne couvre alors qu'une fraction de
+  la fenêtre. La phase 3 en tient compte : la durée finale est calée sur la plus
+  longue piste (webcam/deskshare), pas sur les diapos, et la zone principale
+  affiche le deskshare là où il n'y a pas de diapo.
+- **Vitesse d'encodage** : les phases 2 et 3 encodent en matériel
+  (`h264_videotoolbox`) à environ **6× le temps réel** par piste, soit ~10 min
+  par heure de source et par piste. La phase 2 encode jusqu'à trois pistes à la
+  suite (webcam, deskshare, diapos) : comptez ~30 min par heure de source.
+  Les paralléliser n'apporte rien — le moteur vidéo de la puce est déjà saturé
+  par une seule piste 1080p30.
+  Ne pas ajouter `-realtime 1` aux options `h264_videotoolbox` : ce drapeau
+  demande à l'encodeur de se caler sur le temps réel (utile en direct) et
+  **divise le débit par deux** en traitement par lot, sans rien changer au
+  résultat.
+- **Débit des pistes intermédiaires** : `webcam.mp4` et `deskshare.mp4` sont
+  réencodés à 6 Mbit/s. La source BBB tourne autour de 1,2 Mbit/s et ces
+  fichiers sont de toute façon réencodés en phase 3 : monter le débit ne fait
+  que gonfler le disque (14 Mbit/s produisait des clips de 6,5 Gio) sans rien
+  gagner en qualité ni en vitesse.
 - **Caméras isolées (phase 2b)** : `webcam.mp4` est une grille composée par BBB,
   sans métadonnée de disposition. La détection repère la boîte de contenu (fond
   blanc), puis les coupures aux divisions égales de la grille via la chute de

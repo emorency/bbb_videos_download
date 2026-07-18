@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # PHASE 2 — Génère les clips par présentation à importer dans un logiciel de
-# montage vidéo, à partir des points de coupe édités dans presentations_cut.txt.
+# montage vidéo, à partir des points de coupe édités dans presentations_cut.yaml
+# (ou presentations_cut.txt pour compatibilité).
 #
-# Pour chaque ligne (NUM) de presentations_cut.txt :
+# Pour chaque entrée (NUM) de presentations_cut.yaml/.txt :
 #   output/NUM/webcam.mp4     (caméra + audio)
 #   output/NUM/deskshare.mp4  (partage d'écran, si présent)
 #   output/NUM/slides.mp4     (diapos rendues sur la timeline shapes.svg)
@@ -12,11 +13,10 @@
 # était à l'écran).
 #
 # SCINDER une présentation : webcam et deskshare sont coupés PAR LE TEMPS, donc
-# il suffit d'ajouter une ligne dans presentations_cut.txt avec un NUM unique et
-# une sous-plage [DEBUT, FIN]. Les diapos sont automatiquement tirées de la
-# présentation d'origine que recouvre cette plage — pas besoin d'indiquer l'ID.
-# (Garder chaque coupe à l'intérieur d'une seule présentation d'origine pour que
-# les diapos soient correctes.)
+# il suffit d'ajouter une entrée dans presentations_cut.yaml (ou ligne dans .txt)
+# avec un NUM unique et
+# une sous-plage [DEBUT, FIN]. Les diapos sont rendues depuis la timeline
+# shapes.svg complète, donc une coupe peut traverser un changement de deck.
 #
 # Usage: bbb_make_clips.sh [dossier] [mode] [NUM...]
 #   dossier : dossier de l'enregistrement (défaut: .)
@@ -33,12 +33,81 @@ rec_dir="${1:-.}"
 mode="${2:-encode}"
 shift $(( $# < 2 ? $# : 2 )) || true
 wanted=" $* "   # liste des NUM demandés (vide = toutes)
+VENC="${BBB_VENC:-h264_videotoolbox}"
+STRICT_HW="${BBB_STRICT_HW:-0}"
 cd "$rec_dir"
 
-cutfile="presentations_cut.txt"
-for f in "$cutfile" webcams.mp4; do
-  [ -f "$f" ] || { echo "Erreur: $f introuvable dans $(pwd)." >&2; exit 1; }
-done
+cutfile_yaml="presentations_cut.yaml"
+cutfile_txt="presentations_cut.txt"
+cutfile=""
+tmp_cut=""
+
+if [ -f "$cutfile_yaml" ]; then
+  cutfile="$cutfile_yaml"
+  tmp_cut="$(mktemp)"
+  # YAML -> lignes pipe-delimited: NUM|START|END|PRESENTER|INFO|PRIO
+  python3 - "$cutfile_yaml" > "$tmp_cut" <<'PY'
+import re, sys
+
+path = sys.argv[1]
+entries = []
+cur = None
+
+def unquote(v):
+  v = v.strip()
+  if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+    v = v[1:-1]
+  return v
+
+for raw in open(path, encoding='utf-8'):
+  if not raw.strip() or raw.lstrip().startswith('#'):
+    continue
+  m_new = re.match(r'^\s*-\s*num\s*:\s*(.+?)\s*$', raw)
+  if m_new:
+    if cur:
+      entries.append(cur)
+    cur = {
+      'num': unquote(m_new.group(1)),
+      'start': '',
+      'end': '',
+      'presenter': '',
+      'info': '',
+      'webcams_priority': ''
+    }
+    continue
+  if not cur:
+    continue
+  m_kv = re.match(r'^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*?)\s*$', raw)
+  if not m_kv:
+    continue
+  k, v = m_kv.group(1), m_kv.group(2)
+  if k in ('start', 'end', 'presenter', 'nom', 'info'):
+    if k == 'nom':
+      k = 'presenter'
+    cur[k] = unquote(v)
+  elif k == 'webcams_priority':
+    v = v.strip()
+    if v.startswith('[') and v.endswith(']'):
+      vals = [x.strip() for x in v[1:-1].split(',') if x.strip()]
+      cur[k] = ','.join(vals)
+    else:
+      cur[k] = unquote(v)
+
+if cur:
+  entries.append(cur)
+
+for e in entries:
+  print(f"{e['num']}|{e['start']}|{e['end']}|{e['presenter']}|{e['info']}|{e['webcams_priority']}")
+PY
+  cutfile="$tmp_cut"
+elif [ -f "$cutfile_txt" ]; then
+  cutfile="$cutfile_txt"
+else
+  echo "Erreur: presentations_cut.yaml ou presentations_cut.txt introuvable dans $(pwd)." >&2
+  exit 1
+fi
+
+[ -f webcams.mp4 ] || { echo "Erreur: webcams.mp4 introuvable dans $(pwd)." >&2; exit 1; }
 have_deskshare=0
 [ -f deskshare.mp4 ] && [ -f deskshare.xml ] && have_deskshare=1
 have_shapes=0
@@ -61,6 +130,13 @@ if [ "$have_shapes" = "1" ]; then
         if($1<st[pid])st[pid]=$1; x=$2; if(x>vdur)x=vdur; if(x>en[pid])en[pid]=x }
       END{ for(i=1;i<=n;i++){p=order[i]; printf "%s %.3f %.3f\n", p, st[p], en[p]} }')"
 fi
+
+slide_dir_for_id() {  # <presentation_id> -> NN, ou vide
+  local pid="$1" k
+  for ((k=1; k<=n_orig; k++)); do
+    [ "${orig_id[$k]}" = "$pid" ] && printf '%02d' "$k" && return
+  done
+}
 
 # Présentation source (indice 1..n_orig) qui recouvre le plus la fenêtre [ss,ee].
 find_src() {  # <ss> <ee> -> indice, ou vide
@@ -99,53 +175,87 @@ cut_video() {  # <src> <start> <dur> <out>
     local aopt=(-an)
     ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$1" | grep -q . && \
       aopt=(-c:a aac -b:a 192k)
-    ffmpeg -y -nostdin -v error -ss "$2" -i "$1" -t "$3" \
-      -c:v h264_videotoolbox -b:v 14M "${aopt[@]}" -movflags +faststart "$4"
+    if [ "$VENC" = "h264_videotoolbox" ]; then
+      if ! ffmpeg -y -nostdin -v error -ss "$2" -i "$1" -t "$3" \
+        -c:v h264_videotoolbox -b:v 6M -pix_fmt yuv420p -r 30 \
+        -profile:v high -prio_speed 1 "${aopt[@]}" -movflags +faststart "$4"; then
+        [ "$STRICT_HW" = "1" ] && return 1
+        echo "  (h264_videotoolbox indisponible, fallback libx264)" >&2
+        ffmpeg -y -nostdin -v error -ss "$2" -i "$1" -t "$3" \
+          -c:v libx264 -preset veryfast -crf 18 "${aopt[@]}" -movflags +faststart "$4"
+      fi
+    else
+      ffmpeg -y -nostdin -v error -ss "$2" -i "$1" -t "$3" \
+        -c:v libx264 -preset veryfast -crf 18 "${aopt[@]}" -movflags +faststart "$4"
+    fi
   fi
 }
 
 # Rend un clip vidéo des diapos sur la fenêtre [ss,ee], chaque diapo affichée
 # pendant son intervalle in/out (shapes.svg). Les trous (partage d'écran) tiennent
 # la diapo précédente. Retourne 1 si aucune diapo dans la fenêtre.
-build_slides() {  # <id> <slidedir> <ss> <ee> <out>
-  local id="$1" slidedir="$2" ss="$3" ee="$4" out="$5"
-  local st segs sn d last dur src
+build_slides() {  # <ss> <ee> <out>
+  local ss="$1" ee="$2" out="$3"
+  local st segs pid sn d last dur src dir png key
   st="$(mktemp -d)"
   segs="$(grep -oE '<image[^>]*>' shapes.svg | \
-    sed -nE "s#.*in=\"([0-9.]+)\".*out=\"([0-9.]+)\".*href=\"presentation/$id/svgs/slide([0-9]+)\.svg\".*#\3 \1 \2#p" | \
-    sort -k2 -n | awk -v ss="$ss" -v ee="$ee" '
-      BEGIN{cursor=ss; prev=""}
-      { sn=$1; ino=$2; outo=$3;
+    sed -nE 's#.*in="([0-9.]+)".*out="([0-9.]+)".*href="presentation/([^/]+)/svgs/slide([0-9]+)\.svg".*#\1 \2 \3 \4#p' | \
+    sort -k1 -n | awk -v ss="$ss" -v ee="$ee" '
+      BEGIN{cursor=ss; prev_pid=""; prev_sn=""}
+      { ino=$1; outo=$2; pid=$3; sn=$4;
         if(outo<=ss||ino>=ee) next;
         a=(ino<ss)?ss:ino; b=(outo>ee)?ee:outo; if(a<cursor)a=cursor; if(b<=a) next;
-        if(a>cursor){ hs=(prev!="")?prev:sn; printf "%s %.3f\n", hs, a-cursor }
-        printf "%s %.3f\n", sn, b-a; cursor=b; prev=sn }
-      END{ if(cursor<ee&&prev!="") printf "%s %.3f\n", prev, ee-cursor }')"
+        if(a>cursor && prev_pid!=""){ printf "%s %s %.3f\n", prev_pid, prev_sn, a-cursor }
+        printf "%s %s %.3f\n", pid, sn, b-a; cursor=b; prev_pid=pid; prev_sn=sn }
+      END{ if(cursor<ee&&prev_pid!="") printf "%s %s %.3f\n", prev_pid, prev_sn, ee-cursor }')"
   [ -z "$segs" ] && { rm -rf "$st"; return 1; }
 
-  for sn in $(echo "$segs" | awk '{print $1}' | sort -un); do
+  while read -r pid sn; do
     src=""
-    [ -f "$slidedir/slide${sn}.svg" ] && src="$slidedir/slide${sn}.svg"
-    [ -z "$src" ] && [ -f "$id/slide${sn}.svg" ] && src="$id/slide${sn}.svg"
+    dir="$(slide_dir_for_id "$pid")"
+    [ -n "$dir" ] && [ -f "$dir/slide${sn}.svg" ] && src="$dir/slide${sn}.svg"
+    [ -z "$src" ] && [ -f "$pid/slide${sn}.svg" ] && src="$pid/slide${sn}.svg"
+    png="$st/${pid}_slide${sn}.png"
     if [ -n "$src" ]; then
       # resvg (et non rsvg-convert) : rend correctement les fonds/tracés à
       # très grandes coordonnées des SVG BBD issus de PDF (rsvg les ignore).
-      resvg --width 1920 --height 1080 --background white "$src" "$st/slide${sn}.png" 2>/dev/null
+      resvg --width 1920 --height 1080 --background white "$src" "$png" 2>/dev/null
     else
-      ffmpeg -y -nostdin -v error -f lavfi -i color=c=black:s=1920x1080 -frames:v 1 "$st/slide${sn}.png"
+      ffmpeg -y -nostdin -v error -f lavfi -i color=c=black:s=1920x1080 -frames:v 1 "$png"
     fi
-  done
+  done <<< "$(echo "$segs" | awk '{print $1, $2}' | sort -u)"
 
   { echo "ffconcat version 1.0"
     last=""
-    while read -r sn d; do echo "file '$st/slide${sn}.png'"; echo "duration $d"; last="$sn"; done <<< "$segs"
-    echo "file '$st/slide${last}.png'"
+    while read -r pid sn d; do
+      key="${pid}_slide${sn}"
+      echo "file '$st/${key}.png'"
+      echo "duration $d"
+      last="$key"
+    done <<< "$segs"
+    echo "file '$st/${last}.png'"
   } > "$st/list.txt"
 
   dur="$(awk -v a="$ss" -v b="$ee" 'BEGIN{printf "%.3f", b-a}')"
-  ffmpeg -y -nostdin -v error -f concat -safe 0 -i "$st/list.txt" -t "$dur" \
-    -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p" \
-    -c:v h264_videotoolbox -b:v 8M -movflags +faststart "$out"
+  if [ "$VENC" = "h264_videotoolbox" ]; then
+    if ! ffmpeg -y -nostdin -v error -f concat -safe 0 -i "$st/list.txt" -t "$dur" \
+      -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p" \
+      -c:v h264_videotoolbox -b:v 8M -pix_fmt yuv420p -r 30 \
+      -profile:v high -prio_speed 1 -movflags +faststart "$out"; then
+      if [ "$STRICT_HW" = "1" ]; then
+        rm -rf "$st"
+        return 1
+      fi
+      echo "  (h264_videotoolbox indisponible, fallback libx264)" >&2
+      ffmpeg -y -nostdin -v error -f concat -safe 0 -i "$st/list.txt" -t "$dur" \
+        -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p" \
+        -c:v libx264 -preset veryfast -crf 20 -movflags +faststart "$out"
+    fi
+  else
+    ffmpeg -y -nostdin -v error -f concat -safe 0 -i "$st/list.txt" -t "$dur" \
+      -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p" \
+      -c:v libx264 -preset veryfast -crf 20 -movflags +faststart "$out"
+  fi
   rm -rf "$st"
 }
 
@@ -154,9 +264,10 @@ log() { echo "[$(date +%H:%M:%S)] $*"; }
 mkdir -p output
 [ -f output/manifest.txt ] || : > output/manifest.txt
 log "Mode: $mode"
+log "Encodeur vidéo: $VENC$([ "$STRICT_HW" = "1" ] && printf ' (strict)')"
 [ -n "${wanted// /}" ] && log "Présentations demandées:${wanted}" || log "Présentations: toutes"
 
-while IFS='|' read -r num start end nom info; do
+while IFS='|' read -r num start end nom info webcams_priority; do
   num="$(trim "$num")"
   [ -z "$num" ] && continue
   case "$num" in \#*) continue;; esac
@@ -198,19 +309,24 @@ while IFS='|' read -r num start end nom info; do
     fi
   fi
 
-  # Diapos : présentation source déterminée par la plage horaire de la coupe
+  # Diapos : rend la timeline complète, même si la coupe traverse plusieurs decks.
   src_txt=""
   if [ "$have_shapes" = "1" ]; then
     src="$(find_src "$ss" "$ee")"
     if [ -n "$src" ]; then
-      log "  slides.mp4 … (diapos P${src})"
+      log "  slides.mp4 … (timeline shapes.svg)"
       t0=$SECONDS
-      if build_slides "${orig_id[$src]}" "$(printf '%02d' "$src")" "$ss" "$ee" "$outdir/slides.mp4"; then
+      if build_slides "$ss" "$ee" "$outdir/slides.mp4"; then
         log "  slides.mp4 ✓ ($((SECONDS-t0))s)"
-        ds_txt="$ds_txt + slides"; src_txt="  (diapos P${src})"
+        ds_txt="$ds_txt + slides"; src_txt="  (diapos timeline)"
       fi
     fi
   fi
+
+  # Empreinte de la fenêtre : permet à la phase 3 de repérer des clips périmés
+  # (fenêtre du YAML modifiée après la génération des clips).
+  { echo "start=${start}"; echo "end=${end}"
+    printf 'ss=%s\nee=%s\n' "$ss" "$ee"; } > "$outdir/window.txt"
 
   line="${nn}: ${start}–${end}  [$ds_txt]  — ${info}${src_txt}"
   grep -v "^${nn}: " output/manifest.txt > output/manifest.tmp 2>/dev/null || true
@@ -219,6 +335,8 @@ while IFS='|' read -r num start end nom info; do
   rm -f output/manifest.tmp
   log "  ✓ Présentation ${nn} terminée [${ds_txt}]"
 done < "$cutfile"
+
+[ -n "$tmp_cut" ] && rm -f "$tmp_cut"
 
 echo
 log "Terminé en ${SECONDS}s. Clips dans output/ (voir manifest.txt)."
