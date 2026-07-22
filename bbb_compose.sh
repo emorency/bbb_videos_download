@@ -113,14 +113,35 @@ def gen_intro(title, path):
     im.save(path)
 
 def sh(cmd): subprocess.run(cmd, check=True)
-def sh_with_fallback(cmd, fallback_cmd):
+def sh_progress(cmd, total, label):
+    # Lance ffmpeg en affichant un pourcentage d'avancement : -progress fait écrire
+    # « out_time_us=<microsecondes encodées> » sur stdout, comparé à la durée totale.
+    full = [cmd[0], "-progress", "pipe:1", "-nostats"] + cmd[1:]
+    p = subprocess.Popen(full, stdout=subprocess.PIPE, text=True, bufsize=1)
+    last = -1
+    for line in p.stdout:
+        line = line.strip()
+        if line.startswith(("out_time_us=", "out_time_ms=")):   # les deux sont en µs
+            v = line.split("=", 1)[1]
+            if not v.lstrip("-").isdigit():
+                continue
+            pct = 0 if total <= 0 else min(100, int(int(v) / 1e6 / total * 100))
+            if pct != last:
+                last = pct
+                print(f"\r{label} {pct:3d}%", end="", file=sys.stderr, flush=True)
+    p.wait()
+    if last >= 0:
+        print(f"\r{label} 100%", file=sys.stderr)
+    if p.returncode != 0:
+        raise subprocess.CalledProcessError(p.returncode, cmd)
+def sh_with_fallback(cmd, fallback_cmd, total=0, label=""):
     try:
-        sh(cmd)
+        sh_progress(cmd, total, label) if total else sh(cmd)
     except subprocess.CalledProcessError:
         if not fallback_cmd:
             raise
         print("[encode] h264_videotoolbox indisponible, fallback libx264", file=sys.stderr)
-        sh(fallback_cmd)
+        sh_progress(fallback_cmd, total, label) if total else sh(fallback_cmd)
 def probe(path, entries, stream="v:0"):
     out = subprocess.run(["ffprobe","-v","error","-select_streams",stream,
         "-show_entries",entries,"-of","default=nk=1:nw=1",path],
@@ -140,15 +161,33 @@ def even(v): v=int(round(v)); return v-(v%2)
 def fit(sw,sh,bw,bh):
     s=min(bw/sw,bh/sh); return even(sw*s), even(sh*s)
 
+def _strip_comment(v):
+    # Retire un commentaire « # ... » en fin de ligne, sans toucher un « # »
+    # à l'intérieur d'une valeur entre guillemets. En YAML, un « # » n'ouvre un
+    # commentaire que s'il est précédé d'un espace (ou en début de valeur).
+    out=[]; quote=None; prev_space=True
+    for ch in v:
+        if quote:
+            out.append(ch)
+            if ch==quote: quote=None
+            prev_space=False
+        elif ch in ('"',"'"):
+            quote=ch; out.append(ch); prev_space=False
+        elif ch=='#' and prev_space:
+            break
+        else:
+            out.append(ch); prev_space=ch.isspace()
+    return ''.join(out).rstrip()
+
 def _u(v):
-    v=v.strip()
+    v=_strip_comment(v.strip())
     if len(v)>=2 and ((v[0]=='"' and v[-1]=='"') or (v[0]=="'" and v[-1]=="'")):
         v=v[1:-1]
     return v
 
 def parse_priority(v):
     if not v: return []
-    v=v.strip()
+    v=_strip_comment(v.strip())
     if v.startswith('[') and v.endswith(']'):
         vals=[x.strip() for x in v[1:-1].split(',') if x.strip()]
     else:
@@ -414,11 +453,17 @@ def render(nn):
         cx=sx+(SLOTW-fw)//2; cy=sy+(SLOTH-fh)//2
         ci=add_in("-i",cp)
         en=f"between(t,{seg},{s_end:.2f})"
-        # ombre portée douce
-        fc.append(f"color=c=#00000000:s={fw+32}x{fh+32}:r=30,format=rgba,"
-                  f"drawbox=x=16:y=16:w={fw}:h={fh}:color=black@0.5:t=fill,boxblur=10[sh{k}]")
+        # Carte blanche à la taille EXACTE du slot : si la caméra n'a pas le
+        # format 16:9 du slot (portrait, paysage étroit…), les zones non
+        # couvertes sont comblées en blanc au lieu de laisser voir le fond.
+        # Ombre portée douce autour de la carte (et non de la vidéo) pour un
+        # rendu uniforme quel que soit le format de la caméra.
+        fc.append(f"color=c=#00000000:s={SLOTW+32}x{SLOTH+32}:r=30,format=rgba,"
+                  f"drawbox=x=16:y=16:w={SLOTW}:h={SLOTH}:color=black@0.5:t=fill,boxblur=10[sh{k}]")
+        fc.append(f"color=c=white:s={SLOTW}x{SLOTH}:r=30,setsar=1,format=yuv420p[card{k}]")
         fc.append(f"[{ci}:v]scale={fw}:{fh},setsar=1,setpts=PTS+{seg}/TB[cam{k}]")
-        fc.append(f"[{cur}][sh{k}]overlay={cx-12}:{cy-8}:enable='{en}':shortest=0[m{step}]"); cur=f"m{step}"; step+=1
+        fc.append(f"[{cur}][sh{k}]overlay={sx-12}:{sy-8}:enable='{en}':shortest=0[m{step}]"); cur=f"m{step}"; step+=1
+        fc.append(f"[{cur}][card{k}]overlay={sx}:{sy}:enable='{en}':shortest=0[m{step}]"); cur=f"m{step}"; step+=1
         fc.append(f"[{cur}][cam{k}]overlay={cx}:{cy}:enable='{en}':eof_action=pass:shortest=0[m{step}]"); cur=f"m{step}"; step+=1
 
     # nom (plaque texte rendue en PNG par PIL)
@@ -458,7 +503,7 @@ def render(nn):
             "-filter_complex",";".join(fc),
             "-map","[outv]","-map",f"{wc_i}:a","-t",f"{bdur}",
             *VENC_FALLBACK,*AENC,"-movflags","+faststart",out]
-    sh_with_fallback(base_cmd, fallback_cmd)
+    sh_with_fallback(base_cmd, fallback_cmd, bdur, f"  [{nn}] encodage")
     tag = "  (RENDU D'ESSAI — pas la vidéo finale)" if LIMIT else ""
     print(f"[{nn}] ✓ {out}  (durée ~{bdur:.0f}s, intro superposée 0-{INTRO_DUR}s){tag}")
     subprocess.run(["rm","-rf",tmp])

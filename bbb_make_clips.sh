@@ -22,16 +22,23 @@
 #   dossier : dossier de l'enregistrement (défaut: .)
 #   mode    : encode (défaut, bornes exactes + alignement garanti, réencodage
 #             matériel rapide) | copy (instantané, sans perte, bornes alignées
-#             sur l'image-clé la plus proche)
+#             sur l'image-clé la plus proche). OPTIONNEL — s'il est omis, un NUM
+#             peut suivre directement le dossier (ex: « ... 2026-07-07 02 »).
 #   NUM...  : NUM de ligne à traiter (défaut: toutes). Accepte "5" ou "05".
 #             ex: bbb_make_clips.sh 2026-07-07 encode 3
-#                 bbb_make_clips.sh 2026-07-07 encode 5 6
+#                 bbb_make_clips.sh 2026-07-07 5 6      (mode encode implicite)
 
 set -euo pipefail
 
 rec_dir="${1:-.}"
-mode="${2:-encode}"
-shift $(( $# < 2 ? $# : 2 )) || true
+[ $# -ge 1 ] && shift || true          # consomme le dossier
+# mode est OPTIONNEL : on ne le consomme que si c'est vraiment 'encode'/'copy'.
+# Sinon (ex: « bbb_make_clips.sh 2026-07-16 02 »), l'argument est un NUM, pas le
+# mode — évite de traiter TOUTES les présentations quand on en visait une seule.
+mode="encode"
+if [ "${1:-}" = "encode" ] || [ "${1:-}" = "copy" ]; then
+  mode="$1"; shift
+fi
 wanted=" $* "   # liste des NUM demandés (vide = toutes)
 VENC="${BBB_VENC:-h264_videotoolbox}"
 STRICT_HW="${BBB_STRICT_HW:-0}"
@@ -53,8 +60,26 @@ path = sys.argv[1]
 entries = []
 cur = None
 
+def strip_comment(v):
+  # Retire un commentaire « # ... » en fin de ligne, sans toucher un « # »
+  # dans une valeur entre guillemets (un « # » n'ouvre un commentaire que
+  # s'il est précédé d'un espace ou en début de valeur).
+  out = []; quote = None; prev_space = True
+  for ch in v:
+    if quote:
+      out.append(ch)
+      if ch == quote: quote = None
+      prev_space = False
+    elif ch in ('"', "'"):
+      quote = ch; out.append(ch); prev_space = False
+    elif ch == '#' and prev_space:
+      break
+    else:
+      out.append(ch); prev_space = ch.isspace()
+  return ''.join(out).rstrip()
+
 def unquote(v):
-  v = v.strip()
+  v = strip_comment(v.strip())
   if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
     v = v[1:-1]
   return v
@@ -86,7 +111,7 @@ for raw in open(path, encoding='utf-8'):
       k = 'presenter'
     cur[k] = unquote(v)
   elif k == 'webcams_priority':
-    v = v.strip()
+    v = strip_comment(v.strip())
     if v.startswith('[') and v.endswith(']'):
       vals = [x.strip() for x in v[1:-1].split(',') if x.strip()]
       cur[k] = ','.join(vals)

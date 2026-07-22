@@ -5,10 +5,11 @@
 # Travaille sur output/NN/webcam.mp4 (déjà produit par bbb_make_clips.sh) : on
 # n'analyse que les présentations demandées, pas toute la session.
 #
-# Méthode : échantillonne le clip, détecte la grille de webcams BBB au fil du
-# temps (boîte de contenu sur fond blanc + coupures aux divisions égales via la
-# chute de corrélation entre colonnes/rangées, cellules vides ignorées), segmente
-# en plages de disposition stable, puis découpe chaque tuile active.
+# Méthode : échantillonne le clip, détecte les vraies tuiles webcam BBB (vidéos
+# pleines de tailles/proportions variées sur fond blanc, parfois accolées) par
+# découpe récursive — gouttières blanches puis sauts de couverture — sans supposer
+# de grille régulière. Segmente en plages de disposition stable, puis recadre
+# chaque tuile au plus juste (les bandes blanches de pillarbox sont retirées).
 #
 # Sortie : output/NN/webcams/segSSSs_camK-of-N.mp4  (+ manifest.txt)
 # En analyse auto, les segments à 1 seule caméra ne sont pas découpés
@@ -305,40 +306,97 @@ import sys, glob, numpy as np, PIL.Image as I
 frames_dir, step, W, H, DUR = sys.argv[1], float(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5])
 files = sorted(glob.glob(f"{frames_dir}/f*.png"))
 if not files: sys.exit(0)
-WHITE, WIN, SEAM_THR, EMPTY = 240, 2, 0.86, 0.92
-imgs   = [np.asarray(I.open(f).convert("RGB")) for f in files]
-grays  = [im.mean(2) for im in imgs]
-whites = [(im > WHITE).all(2) for im in imgs]
-rh, rw = grays[0].shape; N = len(files); sx, sy = W/rw, H/rh
-def bbox(w):
-    r=w.mean(1); c=w.mean(0); rc=np.where(r<.985)[0]; cc=np.where(c<.985)[0]
-    return None if len(rc)<3 or len(cc)<3 else (int(cc.min()),int(cc.max()),int(rc.min()),int(rc.max()))
-def colc(g,y0,y1):
-    S=g[y0:y1+1]; M=S-S.mean(0)
-    return (M[:,:-1]*M[:,1:]).sum(0)/(np.sqrt((M[:,:-1]**2).sum(0)*(M[:,1:]**2).sum(0))+1e-6)
-def rowc(g,x0,x1):
-    S=g[:,x0:x1+1]; M=S-S.mean(1,keepdims=1)
-    return (M[:-1]*M[1:]).sum(1)/(np.sqrt((M[:-1]**2).sum(1)*(M[1:]**2).sum(1))+1e-6)
-def decide(p,a0,a1,mx):
-    best=1
-    for C in range(2,mx+1):
-        if all(p[max(0,a0+k*(a1-a0+1)//C-3):a0+k*(a1-a0+1)//C+4].min()<SEAM_THR for k in range(1,C)):
-            best=C
+grays = np.stack([np.asarray(I.open(f).convert("RGB")).mean(2) for f in files])
+N, rh, rw = grays.shape; sx, sy = W/rw, H/rh
+# Les webcams BBB sont des tuiles vidéo PLEINES posées sur fond blanc, de tailles
+# et de proportions différentes (portrait, paysage, etc.), parfois accolées sans
+# gouttière. On ne suppose donc PAS une grille régulière : on détecte les vraies
+# tuiles par découpe récursive (gouttières blanches + sauts de couverture), puis
+# on recadre chaque tuile au plus juste (sans les bandes blanches de pillarbox).
+MINT   = max(8, int(0.045 * rw))   # côté minimal d'une tuile (px échantillonnés)
+MINGAP = max(2, int(0.004 * rw))   # largeur minimale d'une gouttière blanche
+MINSTEP = 0.15                     # saut de couverture séparant deux tuiles accolées
+
+def content(gs):
+    # Tuile = pixel non-blanc dans une FRACTION des trames (vote majoritaire, donc
+    # robuste aux transitoires et au bruit d'encodage) OU structure spatiale
+    # persistante. La gouttière blanche (plate + fixe) ne remplit aucun des deux.
+    dark = (gs < 248).mean(0)
+    g = gs.mean(0)
+    gx = np.abs(np.diff(g, axis=1, prepend=g[:, :1]))
+    gy = np.abs(np.diff(g, axis=0, prepend=g[:1, :]))
+    return (dark > 0.40) | ((gx + gy) > 8.0)
+
+def zero_runs(cov, minrun):     # plages où la couverture est nulle (gouttières)
+    out=[]; s=None
+    for i,v in enumerate(cov):
+        if v<=1e-9 and s is None: s=i
+        elif v>1e-9 and s is not None:
+            if i-s>=minrun: out.append((s,i))
+            s=None
+    if s is not None and len(cov)-s>=minrun: out.append((s,len(cov)))
+    return out
+
+def best_step(cov, minband, minstep):   # meilleur point de rupture de plateau
+    # N'accepte une coupure que si les DEUX côtés sont des plateaux PLATS (écart-type
+    # absolu faible) : une vraie frontière de cellule est une marche nette entre deux
+    # niveaux stables. Une bande de letterbox/pillarbox blanche À L'INTÉRIEUR d'une
+    # cellule produit au contraire une « bosse » (niveau A → B → A) : tout point de
+    # coupe y laisse un côté non plat, donc elle est rejetée (plus de fausses tranches).
+    n=len(cov)
+    if n < 2*minband: return None
+    ps =np.concatenate([[0.0], np.cumsum(cov)])
+    ps2=np.concatenate([[0.0], np.cumsum(cov*cov)])
+    best=None; bestd=minstep
+    for p in range(minband, n-minband+1):
+        lm=(ps[p]-ps[0])/p; rm=(ps[n]-ps[p])/(n-p)
+        d=abs(lm-rm)
+        if d<=bestd: continue
+        lv=max(0.0,(ps2[p]-ps2[0])/p - lm*lm)**0.5
+        rv=max(0.0,(ps2[n]-ps2[p])/(n-p) - rm*rm)**0.5
+        if lv>0.12 or rv>0.12: continue
+        bestd=d; best=p
     return best
-def count(i):
-    bb=bbox(whites[i])
-    if not bb: return 0
-    x0,x1,y0,y1=bb; lo,hi=max(0,i-WIN),min(N,i+WIN+1)
-    C=decide(np.mean([colc(grays[j],y0,y1) for j in range(lo,hi)],0),x0,x1,3)
-    R=decide(np.mean([rowc(grays[j],x0,x1) for j in range(lo,hi)],0),y0,y1,2)
-    n=0
-    for r in range(R):
-        for c in range(C):
-            cx0=x0+c*(x1-x0+1)//C; cx1=x0+(c+1)*(x1-x0+1)//C
-            cy0=y0+r*(y1-y0+1)//R; cy1=y0+(r+1)*(y1-y0+1)//R
-            if whites[i][cy0:cy1,cx0:cx1].mean()<EMPTY: n+=1
-    return max(n,1)
-cnt=[count(i) for i in range(N)]
+
+def decompose(M, x0,x1,y0,y1, out, depth=0):
+    sub=M[y0:y1, x0:x1]
+    ys=np.where(sub.any(1))[0]; xs=np.where(sub.any(0))[0]
+    if len(xs)==0 or len(ys)==0: return
+    x0,x1 = x0+int(xs[0]), x0+int(xs[-1])+1      # recadrage serré sur le contenu
+    y0,y1 = y0+int(ys[0]), y0+int(ys[-1])+1
+    w,h = x1-x0, y1-y0
+    if depth>12 or (w<MINT and h<MINT): out.append((x0,y0,x1,y1)); return
+    colcov=M[y0:y1, x0:x1].mean(0); rowcov=M[y0:y1, x0:x1].mean(1)
+    vg=[g for g in zero_runs(colcov,MINGAP) if g[0]>0 and g[1]<w]   # gouttière verticale
+    if vg:
+        cuts=[0]+[(s+e)//2 for s,e in vg]+[w]
+        for i in range(len(cuts)-1): decompose(M,x0+cuts[i],x0+cuts[i+1],y0,y1,out,depth+1)
+        return
+    hg=[g for g in zero_runs(rowcov,MINGAP) if g[0]>0 and g[1]<h]   # gouttière horizontale
+    if hg:
+        cuts=[0]+[(s+e)//2 for s,e in hg]+[h]
+        for i in range(len(cuts)-1): decompose(M,x0,x1,y0+cuts[i],y0+cuts[i+1],out,depth+1)
+        return
+    ps=best_step(rowcov, max(MINT//2,3), MINSTEP)    # tuiles empilées, largeurs ≠
+    if ps is not None:
+        decompose(M,x0,x1,y0,y0+ps,out,depth+1); decompose(M,x0,x1,y0+ps,y1,out,depth+1); return
+    pv=best_step(colcov, max(MINT//2,3), MINSTEP)    # tuiles côte à côte, hauteurs ≠
+    if pv is not None:
+        decompose(M,x0,x0+pv,y0,y1,out,depth+1); decompose(M,x0+pv,x1,y0,y1,out,depth+1); return
+    out.append((x0,y0,x1,y1))
+
+def detect(M):
+    out=[]; decompose(M,0,M.shape[1],0,M.shape[0],out)
+    out=[t for t in out if (t[2]-t[0])>=MINT and (t[3]-t[1])>=MINT]
+    out.sort(key=lambda t:(round(t[1]/(0.22*M.shape[0])), t[0]))   # ordre lecture: rangées puis colonnes
+    return out
+
+# Nombre de caméras par trame (fenêtre ±1) pour segmenter le temps ; la géométrie
+# fine est ensuite (re)calculée par segment sur toutes ses trames.
+def count_at(i):
+    lo,hi=max(0,i-1),min(N,i+2)
+    return max(1, len(detect(content(grays[lo:hi]))))
+cnt=[count_at(i) for i in range(N)]
 sm=[max(set(cnt[max(0,i-1):i+2]),key=cnt[max(0,i-1):i+2].count) for i in range(N)]
 # absorbe les plages plus courtes que MINF images (bruit de détection) ; les
 # plages adjacentes de même nombre de caméras se recollent alors naturellement.
@@ -359,38 +417,26 @@ while changed:
 mseg=[[a,b] for _,a,b in rle(sm)]
 def ev(v): v=int(round(v)); return v-(v%2)
 for si,(a,b) in enumerate(mseg):
-    bbs=[bbox(whites[i]) for i in range(a,b+1)]; bbs=[x for x in bbs if x]
-    if not bbs: continue
-    A=np.array(bbs); x0,x1,y0,y1=[int(np.median(A[:,k])) for k in range(4)]
-    lo,hi=a,b+1
-    C=decide(np.mean([colc(grays[j],y0,y1) for j in range(lo,hi)],0),x0,x1,3)
-    R=decide(np.mean([rowc(grays[j],x0,x1) for j in range(lo,hi)],0),y0,y1,2)
-    mw=np.mean([whites[j].astype(np.float32) for j in range(lo,hi)],axis=0)  # fraction blanc/pixel
-    cells=[]
-    for r in range(R):
-        for c in range(C):
-            cx0=x0+c*(x1-x0+1)//C; cx1=x0+(c+1)*(x1-x0+1)//C
-            cy0=y0+r*(y1-y0+1)//R; cy1=y0+(r+1)*(y1-y0+1)//R
-            cells.append((cx0,cy0,cx1,cy1, mw[cy0:cy1,cx0:cx1].mean()<EMPTY))
-    K=sum(1 for cc in cells if cc[4])
+    tiles=detect(content(grays[a:b+1]))
+    K=len(tiles)
     start=a*step; end=DUR if si==len(mseg)-1 else min((b+1)*step, DUR)
     if K<2:
-        print(f"{start:.2f} {end:.2f} 0 0 0 0 0 {K} {C}x{R}"); continue
-    k=0
-    for (cx0,cy0,cx1,cy1,active) in cells:
-        if not active: continue
-        k+=1
-        # on garde la tuile ENTIÈRE (ratio de cellule uniforme, réutilisable en gabarit)
-        x=ev(cx0*sx); y=ev(cy0*sy); w=ev((cx1-cx0)*sx); h=ev((cy1-cy0)*sy)
+        print(f"{start:.2f} {end:.2f} 0 0 0 0 0 {K} {K}cam"); continue
+    for k,(tx0,ty0,tx1,ty1) in enumerate(tiles, start=1):
+        x=ev(tx0*sx); y=ev(ty0*sy); w=ev((tx1-tx0)*sx); h=ev((ty1-ty0)*sy)
         if x+w>W: w=ev(W-x)
         if y+h>H: h=ev(H-y)
-        print(f"{start:.2f} {end:.2f} {x} {y} {w} {h} {k} {K} {C}x{R}")
+        print(f"{start:.2f} {end:.2f} {x} {y} {w} {h} {k} {K} {K}cam")
 PY
 )
   rm -rf "$tmp"
     fi
 
     outdir="output/${nn}/webcams"; mkdir -p "$outdir"; : > "$outdir/manifest.txt"
+    # Purge les clips d'une exécution précédente : sinon un ancien découpage
+    # (plus de segments/caméras) resterait mélangé au nouveau et polluerait la
+    # phase 3 (qui prend tous les seg*_cam*.mp4 du dossier).
+    rm -f "$outdir"/seg*_cam*.mp4
   hms(){ awk -v s="$1" 'BEGIN{printf "%d:%02d", s/60, int(s)%60}'; }
   made=0
     planf="$outdir/.split_plan.tmp"

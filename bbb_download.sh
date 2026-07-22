@@ -9,11 +9,14 @@
 #
 # Ensuite : éditer presentations_cut.yaml (ou .txt), puis lancer bbb_make_clips.sh (PHASE 2).
 #
-# Usage: bbb_download.sh <playback_url | recording_id> [dossier]
-#   On peut donner l'URL complète OU juste l'ID d'enregistrement (…-<timestamp>).
+# Usage: bbb_download.sh <playback_url | recording_id | config.yaml> [dossier]
+#   On peut donner l'URL complète, juste l'ID d'enregistrement (…-<timestamp>),
+#   OU un config.yaml contenant un champ « recording_id: » (alias « meeting_id: »).
+#   Sans argument, ./presentations_cut.yaml du dossier courant est utilisé s'il existe.
 #   Sans dossier, il est nommé d'après la date de l'enregistrement (ex: 2026-07-07).
 #   Hôte par défaut pour un ID seul : $BBB_HOST.
 #   ex: bbb_download.sh <recording_id>
+#       bbb_download.sh rlq-20260715.yaml
 #       bbb_download.sh "https://bbb3.services-conseils-linux.org/playback/presentation/2.3/<id>" 07-Jun-2026
 
 set -euo pipefail
@@ -21,13 +24,39 @@ set -euo pipefail
 BBB_HOST="${BBB_HOST:-https://bbb3.services-conseils-linux.org}"
 
 usage() {
-  echo "Usage: $0 <playback_url | recording_id> [dossier]" >&2
+  echo "Usage: $0 <playback_url | recording_id | config.yaml> [dossier]" >&2
+  echo "  Un config.yaml doit contenir 'recording_id:' (ou 'meeting_id:')." >&2
+  echo "  Sans argument: ./presentations_cut.yaml est lu s'il existe." >&2
   echo "  Hôte par défaut (ID seul): $BBB_HOST  (override: BBB_HOST=...)" >&2
   exit 1
 }
-[ "${1:-}" = "" ] && usage
 
-arg="$1"
+# Extrait la valeur d'un champ recording_id: / meeting_id: en tête d'un YAML.
+yaml_recording_id() {
+  grep -E '^[[:space:]]*(recording_id|meeting_id)[[:space:]]*:' "$1" 2>/dev/null \
+    | head -n1 \
+    | sed -E 's/^[^:]*:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/'
+}
+
+# --- Résoudre l'ID : argument direct, ou champ recording_id: d'un config YAML ---
+arg="${1:-}"
+config_abs=""       # chemin absolu du config à installer dans le dossier (si fourni)
+
+if [ -n "$arg" ] && [ -f "$arg" ] && { [[ "$arg" == *.yaml ]] || [[ "$arg" == *.yml ]]; }; then
+  config_src="$arg"
+elif [ -z "$arg" ] && [ -f "presentations_cut.yaml" ]; then
+  config_src="presentations_cut.yaml"
+else
+  config_src=""
+fi
+
+if [ -n "$config_src" ]; then
+  config_abs="$(cd "$(dirname "$config_src")" && pwd)/$(basename "$config_src")"
+  arg="$(yaml_recording_id "$config_abs")"
+  [ -n "$arg" ] || { echo "Erreur: aucun 'recording_id:' (ou 'meeting_id:') dans $config_src." >&2; usage; }
+fi
+
+[ -z "$arg" ] && usage
 if [[ "$arg" == *"://"* ]]; then
   url="$arg"
   id_from_url="${url##*/}"
@@ -64,6 +93,21 @@ mkdir -p "$dest"
 cd "$dest"
 [ -f README.md ] || echo "$url" > README.md
 pres="presentation/$id_from_url"
+
+# Un config.yaml fourni en argument est installé comme presentations_cut.yaml du
+# dossier (sauvegarde horodatée si un fichier différent existe déjà — jamais
+# d'écrasement silencieux). Il fait ensuite foi pour les phases suivantes.
+if [ -n "$config_abs" ]; then
+  target="presentations_cut.yaml"
+  if [ ! "$config_abs" -ef "$(pwd)/$target" ]; then
+    if [ -f "$target" ] && ! cmp -s "$config_abs" "$target"; then
+      bak="$target.$(date +%Y%m%d-%H%M%S).bak"; cp "$target" "$bak"
+      echo "   (ancien $target sauvegardé → $bak)"
+    fi
+    cp "$config_abs" "$target"
+    echo "== Config installé : $target (depuis $config_abs) =="
+  fi
+fi
 
 avail_kb="$(df -Pk . | awk 'NR==2{print $4}')"
 if [ "${avail_kb:-0}" -lt 5242880 ]; then
@@ -195,6 +239,9 @@ fi
   echo "# PHASE 1 terminée. Éditez ce fichier YAML puis lancez la PHASE 2."
   echo "# webcams_priority permet de choisir quel flux cam va au slot 1,2,3"
   echo "# en phase 3 (composition), ex: [2,1,3]."
+  echo "# recording_id : l'ID BBB (…-<timestamp>) — bbb_download/bbb_all le relisent"
+  echo "#   ici, plus besoin de le passer en argument."
+  echo "recording_id: \"$id_from_url\""
   echo "brand: \"RLQ\""
   echo "city: \"MTL\""
   echo "date: \"$yaml_date\""

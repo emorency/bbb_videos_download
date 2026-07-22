@@ -11,8 +11,12 @@
 # télécharge et compose tout, sans autre intervention.
 #
 # Usage :
+#   ./bbb_all.sh <config.yaml> [NUM...]                       # id lu dans le config
 #   ./bbb_all.sh <meeting_id | playback_url> <config.yaml> [NUM...]
 #   ./bbb_all.sh 0fd9362b…-1784147446537 rlq-20260715.yaml
+#
+# Forme courte : si le config.yaml contient un champ « recording_id: » (alias
+# « meeting_id: »), l'ID n'a pas à être passé en argument.
 #
 # <config.yaml> est un presentations_cut.yaml (voir le README) : paramètres
 # globaux (brand/city/date/language/format/encoding) et une liste de
@@ -26,14 +30,28 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <meeting_id | playback_url> <config.yaml> [NUM...]" >&2
-  echo "  ex: $0 0fd9362b…-1784147446537 rlq-20260715.yaml" >&2
+  echo "Usage: $0 <config.yaml> [NUM...]" >&2
+  echo "       $0 <meeting_id | playback_url> <config.yaml> [NUM...]" >&2
+  echo "  Forme courte: le config.yaml contient 'recording_id:' (ou 'meeting_id:')." >&2
+  echo "  ex: $0 rlq-20260715.yaml" >&2
+  echo "      $0 0fd9362b…-1784147446537 rlq-20260715.yaml" >&2
   exit 1
 }
-[ $# -lt 2 ] && usage
+[ $# -lt 1 ] && usage
 
 here="$(cd "$(dirname "$0")" && pwd)"
-id="$1"; config="$2"; shift 2
+
+# Deux formes : <config.yaml> [NUM...]  ou  <id|url> <config.yaml> [NUM...].
+# Un ID/URL n'est jamais un fichier .yaml existant : la distinction est sûre.
+if [ -f "$1" ] && { [[ "$1" == *.yaml ]] || [[ "$1" == *.yml ]]; }; then
+  config="$1"; shift
+  id="$(grep -E '^[[:space:]]*(recording_id|meeting_id)[[:space:]]*:' "$config" 2>/dev/null \
+        | head -n1 | sed -E 's/^[^:]*:[[:space:]]*"?([^"[:space:]#]+)"?.*/\1/')"
+  [ -n "$id" ] || { echo "Erreur: aucun 'recording_id:' (ou 'meeting_id:') dans $config." >&2; usage; }
+else
+  [ $# -lt 2 ] && usage
+  id="$1"; config="$2"; shift 2
+fi
 mode="${MODE:-encode}"
 
 [ -f "$config" ] || { echo "Erreur: config introuvable: $config" >&2; exit 1; }

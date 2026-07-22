@@ -47,11 +47,19 @@ issus de PDF.)
 
 # Ou l'URL complète, et/ou un dossier explicite
 ./bbb_download.sh "https://bbb3.services-conseils-linux.org/playback/presentation/2.3/<id>" 2026-07-07
+
+# Ou un config.yaml portant un champ recording_id: — plus besoin de l'ID en argument
+./bbb_download.sh rlq-20260707.yaml
+#   Sans aucun argument, ./presentations_cut.yaml du dossier courant est lu s'il existe.
 ```
 
 - On peut donner **soit l'URL de lecture complète, soit juste l'ID**
-  d'enregistrement. Avec un ID seul, l'hôte par défaut est
+  d'enregistrement, **soit un `config.yaml`** contenant un champ
+  `recording_id:` (alias `meeting_id:`). Avec un ID seul, l'hôte par défaut est
   `https://bbb3.services-conseils-linux.org` (modifiable via `BBB_HOST=...`).
+- Quand un `config.yaml` est fourni, il est **installé** dans le dossier comme
+  `presentations_cut.yaml` (avec sauvegarde horodatée si un fichier différent
+  existait déjà — jamais d'écrasement silencieux).
 - **Sans dossier**, il est nommé d'après la date tirée du timestamp de l'ID.
 - L'URL de lecture est sauvegardée dans `<dossier>/README.md`.
 
@@ -76,13 +84,15 @@ Ouvrez `<dossier>/presentations_cut.yaml` et ajustez `start` et `end`
 départ sont détectées automatiquement à partir de `shapes.svg`.
 
 Le YAML généré en phase 1 inclut aussi des valeurs globales par défaut pour le
-naming (`brand`, `city`, `date`, `language`, `format`, `encoding`). La `date`
-est déduite du dossier d'enregistrement (ou du timestamp BBB), puis convertie en
-`YYYYMMDD`.
+naming (`brand`, `city`, `date`, `language`, `format`, `encoding`) ainsi qu'un
+champ `recording_id:` rappelant l'ID BBB (pour pouvoir relancer `bbb_download.sh`
+ou `bbb_all.sh` sans le repasser en argument). La `date` est déduite du dossier
+d'enregistrement (ou du timestamp BBB), puis convertie en `YYYYMMDD`.
 
 Exemple YAML :
 
 ```yaml
+recording_id: "0fd9362b…-1784147446537"
 brand: "RLQ"
 city: "MTL"
 date: "20260707"
@@ -331,10 +341,14 @@ alors **tout le pipeline** — téléchargement (phase 1) puis clips, caméras e
 composition (phases 2/2b/3) — pour toutes les présentations du config :
 
 ```bash
+./bbb_all.sh <config.yaml> [NUM...]                        # id lu dans le config
 ./bbb_all.sh <meeting_id | playback_url> <config.yaml> [NUM...]
+./bbb_all.sh rlq-20260715.yaml
 ./bbb_all.sh 0fd9362b…-1784147446537 rlq-20260715.yaml
 ```
 
+- Si le config contient un champ `recording_id:` (alias `meeting_id:`), l'**ID
+  n'a pas à être passé** : `./bbb_all.sh rlq-20260715.yaml` suffit.
 - Le **dossier de sortie** est déduit de la date de l'ID (comme `bbb_download.sh`).
   Le config est installé comme `<dossier>/presentations_cut.yaml` ; un fichier de
   coupe préexistant qui diffèrerait est **sauvegardé** (`.bak`) avant, jamais

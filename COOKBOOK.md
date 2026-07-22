@@ -19,13 +19,16 @@ pip3 install numpy pillow
 #    Préparez un config (voir « L'étape manuelle » ci-dessous), ex. rlq-20260715.yaml
 
 # 2. Une seule commande : téléchargement + clips + caméras + composition, tout.
-./bbb_all.sh 0fd9362b0262e546caf2c07d030316c51f906692-1784147446537 rlq-20260715.yaml
+./bbb_all.sh rlq-20260715.yaml
 ```
 
-L'ID est la partie `…-<timestamp>` de l'URL de lecture. Le dossier de sortie
-(`2026-07-15/`) est déduit de sa date. Sans `NUM` en fin de commande, toutes les
-présentations du config sont composées ; ajoutez-en pour en cibler certaines
-(`./bbb_all.sh <id> rlq-20260715.yaml 01 02`).
+Si le config contient un champ `recording_id:` (l'ID `…-<timestamp>` de l'URL de
+lecture), l'ID n'a pas à être passé en argument. Sinon, donnez-le devant :
+`./bbb_all.sh <id> rlq-20260715.yaml`.
+
+Le dossier de sortie (`2026-07-15/`) est déduit de la date de l'ID. Sans `NUM` en
+fin de commande, toutes les présentations du config sont composées ; ajoutez-en
+pour en cibler certaines (`./bbb_all.sh rlq-20260715.yaml 01 02`).
 
 Résultat : `2026-07-15/output/01/RLQ-MTL-20260715-OpenComb.NadineG.FR.1080p.h264.mp4`
 
@@ -49,6 +52,7 @@ le seul travail à la main. (Astuce : lancez une fois `bbb_download.sh <id>` pou
 obtenir un gabarit pré-rempli depuis `shapes.svg`, ou partez d'un ancien config.)
 
 ```yaml
+recording_id: "0fd9362b…-1784147446537"  # ID BBB — évite de le passer en argument
 brand: "RLQ"          # valeurs globales, reprises dans le nom de fichier
 city: "MTL"
 date: "20260715"
