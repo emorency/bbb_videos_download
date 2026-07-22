@@ -326,7 +326,19 @@ Assemble, par présentation, la vidéo finale selon le [gabarit][gabarit] :
 - **logo** `assets/Tux-FleurDeLys-…png` en bas à droite.
 
 Sortie : **`output/NN/RLQ-City-Date-short_title.presenter.language.format.encoding.mp4`**
-(1920×1080, H.264, 30 fps, MP4).
+(1920×1080, H.264, 30 fps, MP4), plus la **piste audio seule** sous le même nom
+en `.m4a`. Elle est extraite de la vidéo finale par copie de flux — aucun
+ré-encodage, ~1 s — et partage donc exactement son origine des temps
+(t=0 = début du clip) et sa durée : elle se recale sur la vidéo sans décalage.
+`BBB_AUDIO_TRACK=0` pour ne pas la produire.
+
+L'audio n'est **pas ré-encodé** par la phase 3 : `webcam.mp4` contient déjà de
+l'AAC-LC 48 kHz stéréo (phase 2) et la source BBB est à ~65 kb/s, donc un
+ré-encodage ne serait qu'une 3ᵉ génération lossy pour ~2 min de CPU par vidéo. Le
+flux est copié tel quel ; la seule conséquence est que la troncature à la durée
+du clip tombe sur une frontière de paquet AAC (~21 ms). `BBB_AUDIO_REENCODE=1`
+force le ré-encodage (AAC 192 kb/s), ce qui se produit aussi automatiquement si
+le flux source n'est pas de l'AAC.
 `COMPOSE_LIMIT=<s>` pour un rendu d'essai court : il est écrit sous un nom
 distinct `…​.preview.mp4`, jamais confondu avec la vidéo finale. `PYTHON=<chemin>`
 impose un interpréteur (utile si le `python3` par défaut n'a pas Pillow). Les

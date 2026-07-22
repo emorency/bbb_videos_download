@@ -17,10 +17,12 @@
 #   assets/blue-background.png, assets/Tux-FleurDeLys-…png, colonne NOM du cut,
 #   et option webcams_priority (dans presentations_cut.yaml).
 # Sortie : output/NN/<brand>-<city>-<date>-<short_title>.<presenter>.<lang>.<format>.<encoding>.mp4
-#          (1920×1080, H.264, AAC, MP4)
+#          (1920×1080, H.264, AAC, MP4) et la piste audio seule, même nom en .m4a
 #
 # Usage : bbb_compose.sh <dossier> NUM...    (ex : bbb_compose.sh 2026-07-07 02)
 #   COMPOSE_LIMIT=<s> pour un rendu d'essai court.
+#   BBB_AUDIO_TRACK=0 pour ne pas extraire la piste audio séparée.
+#   BBB_AUDIO_REENCODE=1 pour ré-encoder l'audio au lieu de le copier.
 
 set -euo pipefail
 [ $# -lt 2 ] && { echo "Usage: $0 <dossier> NUM..." >&2; exit 1; }
@@ -72,7 +74,22 @@ SLOTW,SLOTH = 384,216
 LOGO_BOX = (1680,840,200,200)
 NAME_X,NAME_Y = 48,966
 INTRO_DUR = 4
-AENC = ["-c:a","aac","-b:a","192k","-ar","48000","-ac","2"]
+AENC_REENCODE = ["-c:a","aac","-b:a","192k","-ar","48000","-ac","2"]
+
+def audio_encoder(src):
+    # L'audio de webcam.mp4 est déjà de l'AAC-LC 48 kHz stéréo (phase 2), et la
+    # source BBB est à ~65 kb/s : le ré-encoder ici n'ajoute rien, ce serait une
+    # 3e génération lossy pour ~2 min de CPU par vidéo. On copie donc le flux tel
+    # quel. Seul effet de bord : la troncature à bdur tombe sur une frontière de
+    # paquet AAC (~21 ms). BBB_AUDIO_REENCODE=1 pour forcer le ré-encodage, et on
+    # y retombe aussi si le flux n'est pas de l'AAC muxable en MP4.
+    if os.environ.get("BBB_AUDIO_REENCODE","0") == "1":
+        return AENC_REENCODE, "ré-encodé AAC 192k"
+    codec = (probe(src, "stream=codec_name", stream="a:0") or [""])[0]
+    if codec == "aac":
+        return ["-c:a","copy"], "audio copié"
+    print(f"  (audio '{codec or 'inconnu'}' non copiable, ré-encodage AAC)", file=sys.stderr)
+    return AENC_REENCODE, "ré-encodé AAC 192k"
 
 def video_encoder(bitrate, crf):
     if VENC_NAME == "h264_videotoolbox":
@@ -489,10 +506,12 @@ def render(nn):
     if LIMIT:
         out_name = re.sub(r"\.mp4$", ".preview.mp4", out_name)
     out=f"{od}/{out_name}"
+    AENC, aenc_label = audio_encoder(webcam)
     print(f"[{nn}] composition ({bdur:.0f}s, {len(cams)} caméra(s)"
           f"{' + diapos' if have_slides else ''}{' + deskshare' if have_ds else ''}"
           f"{' + nom' if nom else ''}{' + priorité cams' if webcams_priority else ''}, intro 0-{INTRO_DUR}s"
-          f"{' (générée)' if intro_generated else ''}, encodeur {VENC_NAME}{' strict' if STRICT_HW else ''}) …")
+          f"{' (générée)' if intro_generated else ''}, encodeur {VENC_NAME}{' strict' if STRICT_HW else ''}"
+          f", {aenc_label}) …")
     base_cmd = ["ffmpeg","-nostdin","-v","error","-y",*ins,
         "-filter_complex",";".join(fc),
         "-map","[outv]","-map",f"{wc_i}:a","-t",f"{bdur}",
@@ -506,6 +525,20 @@ def render(nn):
     sh_with_fallback(base_cmd, fallback_cmd, bdur, f"  [{nn}] encodage")
     tag = "  (RENDU D'ESSAI — pas la vidéo finale)" if LIMIT else ""
     print(f"[{nn}] ✓ {out}  (durée ~{bdur:.0f}s, intro superposée 0-{INTRO_DUR}s){tag}")
+
+    # Piste audio seule, extraite de la vidéo finale par simple copie de flux
+    # (aucun ré-encodage, ~1 s) : elle est donc synchrone avec elle par
+    # construction — même origine des temps (t=0 = début du clip), même durée.
+    # BBB_AUDIO_TRACK=0 pour ne pas la produire.
+    if os.environ.get("BBB_AUDIO_TRACK","1") != "0":
+        aout = re.sub(r"\.mp4$", ".m4a", out)
+        try:
+            sh(["ffmpeg","-nostdin","-v","error","-y","-i",out,
+                "-vn","-c:a","copy","-movflags","+faststart",aout])
+            print(f"[{nn}] ✓ {aout}  (piste audio seule, AAC)")
+        except subprocess.CalledProcessError:
+            print(f"[{nn}] ⚠ extraction de la piste audio échouée (pas d'audio ?)")
+
     subprocess.run(["rm","-rf",tmp])
 
 for nn in nums:
