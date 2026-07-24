@@ -132,7 +132,7 @@ Exemple : `Martial Bigras` devient `MartialB`.
 
 `presentations_cut.txt` reste accepté pour compatibilité.
 
-```
+```text
 # NUM | DEBUT    | FIN      | NOM                  | INFO
 01    | 0:00:00  | 0:07:36  |                      | 28 diapos — Bienvenue aux...
 02    | 0:07:36  | 0:25:16  | Jérémy Viau-Trudel   | 3 diapos — L'objection-sociocratique...
@@ -151,7 +151,7 @@ ajoutez simplement une entrée avec un **num unique** et une **sous-plage**
 `start`/`end`. La webcam et le deskshare sont coupés par le temps, et les diapos
 sont automatiquement tirées de la présentation d'origine que recouvre la plage.
 
-```
+```yaml
 presentations:
   - num: "05a"
     start: "1:38:26"
@@ -200,7 +200,7 @@ présentation d'origine pour que les diapos soient correctes.)
 
 Résultat dans `<dossier>/output/` :
 
-```
+```text
 output/
 ├── 01/
 │   ├── webcam.mp4
@@ -242,8 +242,14 @@ MANUAL_PLAN=webcams_plan.txt ./bbb_split_webcams.sh <dossier> 01
 - Sortie : `output/NN/webcams/segSSSs_camK-of-N.mp4` (**max 3 caméras**, ratio de
   cellule conservé). `STEP=<s>` change le pas d'échantillonnage (défaut 4 s).
 - `VERBOSE=1` affiche la progression détaillée.
-- `VIDEO_CODEC=libx264` permet de remplacer l'encodeur par défaut
-  `h264_videotoolbox` si l'encodeur matériel n'est pas disponible.
+- `BBB_VENC=libx264` force explicitement `libx264` sur les phases 2, 2b et 3.
+- En phase 2b, `VIDEO_CODEC=...` reste accepté comme alias de compatibilité,
+  mais `BBB_VENC` est désormais la variable recommandée.
+- Sans variable, la phase 2b essaie `h264_videotoolbox`, puis bascule
+  automatiquement sur `libx264` si l'encodeur matériel n'est pas disponible.
+- Sur Debian et plus généralement sur Linux, `h264_videotoolbox` n'existe pas :
+  utilisez `BBB_VENC=libx264` pour éviter l'avertissement, ou laissez le
+  fallback automatique faire la bascule.
 - Si vous connaissez déjà la disposition, `FORCE_GRID=<C>x<R>` et
   `FORCE_ACTIVE=...` permettent de **sauter l'analyse** (exemple : 2x2 avec
   la dernière case vide -> `FORCE_GRID=2x2 FORCE_ACTIVE=1,2,3`).
@@ -376,7 +382,7 @@ composition (phases 2/2b/3) — pour toutes les présentations du config :
 ## Scripts
 
 | Script | Rôle |
-|--------|------|
+| -------- | ------ |
 | `bbb_all.sh` | Tout-en-un : télécharge (phase 1) puis clips/caméras/composition (2/2b/3) à partir d'un ID + un config de coupes. |
 | `bbb_download.sh` | **Phase 1** : télécharge tout + génère `presentations_cut.yaml` (et `.txt` de compatibilité). |
 | `bbb_make_clips.sh` | **Phase 2** : génère les clips alignés par présentation (webcam / deskshare / slides). |

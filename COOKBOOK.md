@@ -10,6 +10,11 @@ brew install ffmpeg resvg jq
 pip3 install numpy pillow
 ```
 
+Sur Debian/Linux, `h264_videotoolbox` n'existe pas. Utilisez
+`BBB_VENC=libx264 ./bbb_all.sh ...` pour forcer l'encodeur logiciel dès le
+départ, ou laissez les phases d'encodage basculer automatiquement vers
+`libx264`.
+
 ## Le parcours complet
 
 **Deux étapes : vous préparez le config, le script fait tout le reste.**
@@ -204,21 +209,21 @@ complète.
 ## Dépannage
 
 | Message | Cause | Solution |
-|---|---|---|
+| --- | --- | --- |
 | `ni slides.mp4 ni deskshare.mp4 — ignoré` | phase 2 pas lancée pour ce NUM | `./bbb_make_clips.sh <dossier> encode <NUM>` |
 | `avertissement : zone principale vide` | ni diapo ni partage dans la fenêtre | vérifier `start`/`end` dans le YAML |
 | `metadata manquante ou vide` | `short_title` ou `presenter` absent | compléter l'entrée du YAML |
 | `⚠ clips générés pour la fenêtre […] mais le YAML dit […]` | `start`/`end` changés après la coupe | relancer `./bbb_make_clips.sh <dossier> encode <NUM>` |
 | `l'interpréteur '…' n'a pas Pillow` (ou numpy) | le `python3` du PATH n'a pas les modules | `pip3 install numpy pillow`, ou suivre la ligne `PYTHON=…` suggérée |
 | `0 caméra(s)` en phase 3 | phase 2b pas lancée pour ce NUM | `./bbb_split_webcams.sh <dossier> <NUM>` |
-| `h264_videotoolbox indisponible` | encodeur matériel absent | bascule seule sur libx264 (plus lent) ; `BBB_STRICT_HW=1` pour échouer au lieu de basculer |
+| `h264_videotoolbox indisponible` | encodeur matériel absent | bascule seule sur libx264 (plus lent) ; `BBB_VENC=libx264` pour le forcer partout, `BBB_STRICT_HW=1` pour échouer au lieu de basculer |
 
 ## Combien de temps ça prend
 
 Ordres de grandeur pour **une heure** de source, sur un Mac Apple Silicon :
 
 | Étape | Durée | Disque |
-|---|---|---|
+| --- | --- | --- |
 | 1 — téléchargement | selon le lien | ~3 Gio |
 | 2 — clips | ~30 min (3 pistes à ~10 min) | ~3 Gio |
 | 2b — caméras | quelques minutes | faible |

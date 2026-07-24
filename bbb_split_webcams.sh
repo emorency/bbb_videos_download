@@ -46,7 +46,8 @@ FORCE_ACTIVE="${FORCE_ACTIVE:-}"
 FORCE_BBOX="${FORCE_BBOX:-}"
 MANUAL_PLAN="${MANUAL_PLAN:-}"
 MANUAL_SEGMENTS="${MANUAL_SEGMENTS:-}"
-VIDEO_CODEC="${VIDEO_CODEC:-h264_videotoolbox}"
+VENC="${BBB_VENC:-${VIDEO_CODEC:-h264_videotoolbox}}"
+STRICT_HW="${BBB_STRICT_HW:-0}"
 VIDEO_BITRATE="${VIDEO_BITRATE:-8M}"
 AUDIO_BITRATE="${AUDIO_BITRATE:-128k}"
 
@@ -66,6 +67,44 @@ if ! "$PYTHON" -c "import numpy, PIL" 2>/dev/null; then
 fi
 
 log() { [ "$VERBOSE" = "1" ] && echo "$*"; }
+
+append_video_codec_args() {  # <codec> appends ffmpeg args to global cmd array
+    local codec="$1"
+
+    case "$codec" in
+        h264_videotoolbox)
+            cmd+=(-c:v h264_videotoolbox -b:v "$VIDEO_BITRATE" -pix_fmt yuv420p -r 30 -profile:v high -prio_speed 1)
+            ;;
+        libx264)
+            cmd+=(-c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -r 30)
+            ;;
+        *)
+            cmd+=(-c:v "$codec" -b:v "$VIDEO_BITRATE")
+            ;;
+    esac
+}
+
+build_segment_cmd() {  # <codec> <start> <dur> <input> <cams_tmp> <outdir>
+    local codec="$1" start="$2" dur="$3" input="$4" cams_file="$5" outdir="$6"
+    local fc="" idx=0 out kcam K grid x y w h _s _e _K _grid
+
+    cmd=(ffmpeg -y -nostdin -v error -ss "$start" -i "$input")
+    while read -r _s _e x y w h kcam _K _grid; do
+        idx=$((idx+1))
+        fc+="[0:v]crop=${w}:${h}:${x}:${y}[v${idx}];"
+    done < "$cams_file"
+    fc="${fc%;}"
+    cmd+=(-filter_complex "$fc")
+
+    idx=0
+    while read -r _s _e x y w h kcam K grid; do
+        idx=$((idx+1))
+        out="$outdir/seg$(printf '%04d' "${start%.*}")s_cam${kcam}-of-${K}.mp4"
+        cmd+=(-map "[v${idx}]" -map 0:a? -t "$dur")
+        append_video_codec_args "$codec"
+        cmd+=(-c:a aac -b:a "$AUDIO_BITRATE" -movflags +faststart "$out")
+    done < "$cams_file"
+}
 
 even_dim() {
     local v="$1"
@@ -466,21 +505,10 @@ PY
         cams_tmp="$outdir/.cams_${start//./_}_${end//./_}.tmp"
         awk -v s="$start" -v e="$end" -v k="$K" '$1==s && $2==e && $8==k {print}' "$planf" > "$cams_tmp"
 
-        fc=""
-        cmd=(ffmpeg -y -nostdin -v error -ss "$start" -i "$wc")
-        idx=0
-        while read -r _s _e x y w h kcam _K _grid; do
-            idx=$((idx+1))
-            fc+="[0:v]crop=${w}:${h}:${x}:${y}[v${idx}];"
-        done < "$cams_tmp"
-        fc="${fc%;}"
-        cmd+=(-filter_complex "$fc")
+        build_segment_cmd "$VENC" "$start" "$dur" "$wc" "$cams_tmp" "$outdir"
 
-        idx=0
         while read -r _s _e x y w h kcam _K _grid; do
-            idx=$((idx+1))
             out="$outdir/seg$(printf '%04d' "${start%.*}")s_cam${kcam}-of-${K}.mp4"
-            cmd+=(-map "[v${idx}]" -map 0:a? -t "$dur" -c:v "$VIDEO_CODEC" -b:v "$VIDEO_BITRATE" -c:a aac -b:a "$AUDIO_BITRATE" -movflags +faststart "$out")
             made=$((made+1))
             echo "  $(hms "$start")–$(hms "$end")  cam ${kcam}/${K} (${grid})  crop ${w}x${h}+${x}+${y} -> ${out##*/}" | tee -a "$outdir/manifest.txt"
         done < "$cams_tmp"
@@ -488,7 +516,16 @@ PY
         if [ "$DRY_RUN" = "1" ]; then
             echo "  DRY_RUN=1 — encodage ffmpeg ignoré"
         else
-            "${cmd[@]}"
+            if ! "${cmd[@]}"; then
+                if [ "$VENC" = "h264_videotoolbox" ] && [ "$STRICT_HW" != "1" ]; then
+                    echo "  (h264_videotoolbox indisponible, fallback libx264)" >&2
+                    build_segment_cmd "libx264" "$start" "$dur" "$wc" "$cams_tmp" "$outdir"
+                    "${cmd[@]}"
+                else
+                    rm -f "$cams_tmp"
+                    exit 1
+                fi
+            fi
         fi
         rm -f "$cams_tmp"
     done < "$segf"
