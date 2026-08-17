@@ -8,6 +8,8 @@ Les explications complètes sont dans [README.md](README.md).
 ```bash
 brew install ffmpeg resvg jq
 pip3 install numpy pillow
+# recommandé pour la GUI Qt et l'auto-plan OpenCV
+pip3 install PySide6 opencv-python
 ```
 
 Sur Debian/Linux, `h264_videotoolbox` n'existe pas. Utilisez
@@ -37,6 +39,17 @@ pour en cibler certaines (`./bbb_all.sh rlq-20260715.yaml 01 02`).
 
 Résultat : `2026-07-15/output/01/RLQ-MTL-20260715-OpenComb.NadineG.FR.1080p.h264.mp4`
 
+Pour préparer la session à l'avance et déposer `intro.jpg` au bon endroit,
+faites d'abord :
+
+```bash
+./bbb_init.sh <meeting_id>
+```
+
+Le script crée le dossier de session, les dossiers `output/NN/` et un
+`presentations_cut.yaml` de base. Vous pouvez alors copier `intro.jpg` dans
+`output/01/`, `output/02/`, etc., avant de lancer `./bbb_all.sh ...`.
+
 Pour lancer une phase seule (ex. recomposer sans re-télécharger) :
 
 ```bash
@@ -44,6 +57,20 @@ Pour lancer une phase seule (ex. recomposer sans re-télécharger) :
 ./bbb_split_webcams.sh 2026-07-15 01         # caméras
 ./bbb_compose.sh      2026-07-15 01          # vidéo finale
 ```
+
+Pour la revue manuelle de la grille webcam et l'orchestration des phases, la
+voie recommandée est la GUI Qt :
+
+```bash
+python3 bbb_webcams_plan_gui_qt.py 2026-07-15 01
+# ou via le lanceur (utilise .venv-qt/bin/python si présent)
+./bbb_webcams_plan_gui_launcher.sh 2026-07-15 01
+```
+
+Dans la GUI Qt, utilisez le flux guidé :
+1. `Prepare clips + auto plan`
+2. `Open plan editor tab`
+3. `Split manual + compose`
 
 Intro : déposez `2026-07-15/intro.jpg` (commune à la session) avant l'étape 2,
 ou laissez le script générer un carton. `./bbb_download_event_bg.sh "<url>"` la
@@ -139,6 +166,31 @@ FORCE_GRID=2x2 FORCE_ACTIVE=1,2,3 ./bbb_split_webcams.sh 2026-07-15 01
 # la grille change en cours de clip : plan manuel
 MANUAL_PLAN=splits.txt ./bbb_split_webcams.sh 2026-07-15 01
 ```
+
+Si la grille est fixe pour toute la présentation, le plus simple est de la
+déclarer dans le YAML avec `webcams_grid: "RxC"` (ex: `"2x3"` = 2 rangées,
+3 colonnes).
+Vous pouvez aussi indiquer uniquement le nombre de webcams (`"1"`, `"2"`,
+`"3"`, `"4"`, `"6"`) et le script choisira la grille égale correspondante.
+Si la grille change en cours de présentation, utilisez `webcams_plan`
+structuré:
+
+```yaml
+webcams_plan:
+  - start: "0:00"
+    grid: "2x3"
+    active: [1, 2, 3, 4, 5]
+  - start: "12:30"
+    grid: "2x2"
+    active: [1, 2, 3]
+```
+
+`end` est optionnel: sans `end`, un segment va jusqu'au `start` du segment
+suivant; le dernier va jusqu'à la fin du clip.
+
+Les temps de `webcams_plan` peuvent être donnés sur la timeline absolue de la
+présentation (mêmes repères que `start`/`end` de l'entrée), le script les
+normalise automatiquement pour la découpe du clip.
 
 ### Deux exposés dans une seule présentation détectée
 

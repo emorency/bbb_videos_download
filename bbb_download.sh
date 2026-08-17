@@ -5,9 +5,9 @@
 #   webcams.mp4, deskshare.mp4        (vidéos de session)
 #   shapes.svg, deskshare.xml, presentation_text.json  (timing)
 #   <presentation_id>/slideN.svg      (diapos, un sous-dossier par présentation)
-# puis génère presentations_cut.yaml (+ presentations_cut.txt pour compatibilité).
+# puis génère presentations_cut.yaml.
 #
-# Ensuite : éditer presentations_cut.yaml (ou .txt), puis lancer bbb_make_clips.sh (PHASE 2).
+# Ensuite : éditer presentations_cut.yaml, puis lancer bbb_make_clips.sh (PHASE 2).
 #
 # Usage: bbb_download.sh <playback_url | recording_id | config.yaml> [dossier]
 #   On peut donner l'URL complète, juste l'ID d'enregistrement (…-<timestamp>),
@@ -148,8 +148,8 @@ done
 [ -f shapes.svg ] || { echo "Erreur: shapes.svg manquant, impossible de continuer." >&2; exit 1; }
 
 echo "== Diapos (SVG) — un dossier numéroté par présentation (ordre de session) =="
-# Ordre de session = première apparition dans shapes.svg (identique aux NUM de
-# presentations_cut.txt), pour que le dossier NN corresponde à la présentation NN.
+# Ordre de session = première apparition dans shapes.svg, pour que le dossier NN
+# corresponde à la présentation NN.
 ordered_ids="$(grep -oE '<image[^>]*>' shapes.svg | \
   sed -nE 's/.*href="presentation\/([^/]+)\/svgs\/.*/\1/p' | awk '!seen[$0]++')"
 seq=0
@@ -175,10 +175,10 @@ while read -r pid; do
   echo "  $nn ($pid) : $count diapos"
 done <<< "$ordered_ids"
 
-if [ -f presentations_cut.yaml ] || [ -f presentations_cut.txt ]; then
-  echo "== presentations_cut.yaml/.txt déjà présent — CONSERVÉ (vos modifications ne sont pas touchées) =="
+if [ -f presentations_cut.yaml ]; then
+  echo "== presentations_cut.yaml déjà présent — CONSERVÉ (vos modifications ne sont pas touchées) =="
 else
-echo "== Génération de presentations_cut.yaml (+ .txt) =="
+echo "== Génération de presentations_cut.yaml =="
 video_dur="$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 webcams.mp4)"
 hms() { awk -v s="$1" 'BEGIN{printf "%d:%02d:%02d", s/3600, (s%3600)/60, s%60}'; }
 
@@ -233,8 +233,6 @@ fi
       end' presentation_text.json)"
     printf '%-6s| %-9s| %-9s| %-20s| %s\n' "$(printf '%02d' "$i")" "$(hms "$s")" "$(hms "$e")" "" "$label"
   done <<< "$boundaries"
-} > presentations_cut.txt
-
 {
   echo "# PHASE 1 terminée. Éditez ce fichier YAML puis lancez la PHASE 2."
   echo "# webcams_priority permet de choisir quel flux cam va au slot 1,2,3"
@@ -249,22 +247,23 @@ fi
   echo "format: \"1080p\""
   echo "encoding: \"h264\""
   echo "presentations:"
-  while IFS='|' read -r num start end nom info; do
-    num="$(echo "$num" | sed 's/^ *//;s/ *$//')"
-    case "$num" in ''|\#*) continue;; esac
-    start="$(echo "$start" | sed 's/^ *//;s/ *$//')"
-    end="$(echo "$end" | sed 's/^ *//;s/ *$//')"
-    nom="$(echo "$nom" | sed 's/^ *//;s/ *$//; s/"/\\"/g')"
-    info="$(echo "$info" | sed 's/^ *//;s/ *$//; s/"/\\"/g')"
+  i=0
+  while read -r pid s e; do
+    [ -z "$pid" ] && continue
+    i=$((i+1))
+    num="$(printf '%02d' "$i")"
     echo "  - num: \"$num\""
-    echo "    start: \"$start\""
-    echo "    end: \"$end\""
-    echo "    presenter: \"$nom\""
-    echo "    info: \"$info\""
+    echo "    start: \"$(hms "$s")\""
+    echo "    end: \"$(hms "$e")\""
+    echo "    presenter: \"\""
+    echo "    info: \"diapos détectées dans shapes.svg\""
+    echo "    webcams_grid: \"\""
+    echo "    webcams_plan: []"
     echo "    webcams_priority: []"
-  done < presentations_cut.txt
+  done <<< "$boundaries"
+}
 } > presentations_cut.yaml
 fi
 
 echo
-echo "Terminé. Éditez $(pwd)/presentations_cut.yaml (ou .txt) puis lancez la PHASE 2 (bbb_make_clips.sh)."
+echo "Terminé. Éditez $(pwd)/presentations_cut.yaml puis lancez la PHASE 2 (bbb_make_clips.sh)."

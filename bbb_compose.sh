@@ -6,7 +6,7 @@
 #   droite). Chaque vidéo démarre par un carton d'intro de 4 s.
 #
 # Voir le gabarit (schéma à l'échelle) :
-#   https://claude.ai/code/artifact/0d9616f0-de4b-4538-ba85-97faa8e9ea14
+#   docs/layout.md
 #
 # Entrées (déjà produites par les phases 2 / 2b) :
 #   output/NN/webcam.mp4 (audio), output/NN/slides.mp4 et output/NN/deskshare.mp4
@@ -21,6 +21,8 @@
 #
 # Usage : bbb_compose.sh <dossier> NUM...    (ex : bbb_compose.sh 2026-07-07 02)
 #   COMPOSE_LIMIT=<s> pour un rendu d'essai court.
+#   COMPOSE_CRF=<n>, COMPOSE_PRESET=<preset>, COMPOSE_BITRATE=<br> pour ajuster
+#   la vitesse/qualité (utile en mode preview).
 #   BBB_AUDIO_TRACK=0 pour ne pas extraire la piste audio séparée.
 #   BBB_AUDIO_REENCODE=1 pour ré-encoder l'audio au lieu de le copier.
 
@@ -61,6 +63,9 @@ FONT = os.environ.get("COMPOSE_FONT","")
 LIMIT = os.environ.get("COMPOSE_LIMIT","")
 VENC_NAME = os.environ.get("BBB_VENC", "h264_videotoolbox")
 STRICT_HW = os.environ.get("BBB_STRICT_HW", "0") == "1"
+COMPOSE_BITRATE = os.environ.get("COMPOSE_BITRATE", "12M")
+COMPOSE_CRF = os.environ.get("COMPOSE_CRF", "20")
+COMPOSE_PRESET = os.environ.get("COMPOSE_PRESET", "veryfast")
 
 BG   = "../assets/blue-background.png"
 LOGO = "../assets/Tux-FleurDeLys-shadow-RLQ-v2-fondTransp.2160x2160.png"
@@ -68,9 +73,15 @@ for p in (BG, LOGO):
     if not os.path.exists(p): sys.exit(f"Introuvable : {p}")
 
 W,H = 1920,1080
-MAIN = (48,132,1440,810)               # x,y,w,h
-SLOTS = [(1456,96),(1456,340),(1456,584)]
-SLOTW,SLOTH = 384,216
+MAIN = (48,132,1312,738)               # x,y,w,h (16:9)
+SLOTS = [                               # 3 slots principaux + 1 slot additionnel
+    (1340, 96, 384, 216),
+    (1340, 340, 384, 216),
+    (1340, 584, 384, 216),
+    # Slot 4: même taille que les slots principaux, légèrement superposé
+    # au coin bas-droit de la zone principale.
+    (1200, 816, 384, 216),
+]
 LOGO_BOX = (1680,840,200,200)
 NAME_X,NAME_Y = 48,966
 INTRO_DUR = 4
@@ -91,23 +102,23 @@ def audio_encoder(src):
     print(f"  (audio '{codec or 'inconnu'}' non copiable, ré-encodage AAC)", file=sys.stderr)
     return AENC_REENCODE, "ré-encodé AAC 192k"
 
-def video_encoder(bitrate, crf):
+def video_encoder():
     if VENC_NAME == "h264_videotoolbox":
         primary = [
             "-c:v", "h264_videotoolbox",
-            "-b:v", bitrate,
+            "-b:v", COMPOSE_BITRATE,
             "-pix_fmt", "yuv420p",
             "-r", "30",
             "-profile:v", "high",
             "-prio_speed", "1",
         ]
-        fallback = None if STRICT_HW else ["-c:v", "libx264", "-preset", "veryfast", "-crf", crf, "-pix_fmt", "yuv420p", "-r", "30"]
+        fallback = None if STRICT_HW else ["-c:v", "libx264", "-preset", COMPOSE_PRESET, "-crf", COMPOSE_CRF, "-pix_fmt", "yuv420p", "-r", "30"]
         return primary, fallback
     if VENC_NAME == "libx264":
-        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", crf, "-pix_fmt", "yuv420p", "-r", "30"], None
+        return ["-c:v", "libx264", "-preset", COMPOSE_PRESET, "-crf", COMPOSE_CRF, "-pix_fmt", "yuv420p", "-r", "30"], None
     return ["-c:v", VENC_NAME, "-pix_fmt", "yuv420p", "-r", "30"], None
 
-VENC, VENC_FALLBACK = video_encoder("12M", "20")
+VENC, VENC_FALLBACK = video_encoder()
 
 def _font(sz):
     try: return ImageFont.truetype(FONT, sz)
@@ -333,18 +344,7 @@ def load_cut_map():
                                })
         return cut, defaults
 
-    if os.path.exists("presentations_cut.txt"):
-        for ln in open("presentations_cut.txt",encoding="utf-8"):
-            s=ln.rstrip("\n")
-            if not s.strip() or s.lstrip().startswith("#"):
-                continue
-            parts=[x.strip() for x in s.split("|")]
-            if len(parts)<5:
-                continue
-            cut[parts[0]]=(to_s(parts[1]),to_s(parts[2]),parts[3],parts[4],[],{})
-        return cut, defaults
-
-    sys.exit("Introuvable: presentations_cut.yaml ou presentations_cut.txt")
+    sys.exit("Introuvable: presentations_cut.yaml")
 
 # --- cut file : NN -> (start,end,nom,info,webcams_priority[],meta{}) ---
 cut, defaults = load_cut_map()
@@ -364,13 +364,13 @@ def render(nn):
     slides=f"{od}/slides.mp4"
     webcam=f"{od}/webcam.mp4"
     deskshare=f"{od}/deskshare.mp4"
-    if nn not in cut: print(f"[{nn}] absent de presentations_cut.txt — ignoré"); return
+    if nn not in cut: print(f"[{nn}] absent de presentations_cut.yaml — ignoré"); return
     dstart,dend,nom,info,webcams_priority,meta = cut[nn]
     full_meta = {**defaults, **{k:v for k,v in meta.items() if v}}
     require_strict_metadata(full_meta, nn)
     # Clips périmés : la fenêtre stampée par la phase 2 doit correspondre au YAML.
     wf=f"{od}/window.txt"
-    if os.path.exists(wf):
+    if os.path.exists(wf) and not LIMIT:
         st={}
         for ln in open(wf):
             if "=" in ln: k,v=ln.strip().split("=",1); st[k]=v
@@ -448,26 +448,39 @@ def render(nn):
 
     # caméras
     cams=sorted(glob.glob(f"{od}/webcams/seg*_cam*.mp4"))
+    cam_entries=[]
+    cam_ids=set()
+    for cp in cams:
+        m=re.search(r"seg(\d+)s_cam(\d+)-of-(\d+)",os.path.basename(cp))
+        if not m:
+            continue
+        cam_entries.append((cp,m))
+        cam_ids.add(int(m.group(2)))
+
+    layout_mode = "A+extra"
+    if webcams_priority:
+        layout_mode_source = f"yaml:webcams_priority({len(webcams_priority)})"
+    else:
+        layout_mode_source = "default:A+extra"
+    slots = SLOTS
 
     # slot caméra: par défaut cam1->slot1, cam2->slot2...;
     # si webcams_priority est fourni, il définit l'ordre des slots.
     slot_by_cam = {}
     if webcams_priority:
         for slot_i, cam_i in enumerate(webcams_priority, start=1):
-            if 1 <= slot_i <= len(SLOTS):
+            if 1 <= slot_i <= len(slots):
                 slot_by_cam[cam_i] = slot_i
 
-    for cp in cams:
-        m=re.search(r"seg(\d+)s_cam(\d+)-of-(\d+)",os.path.basename(cp))
-        if not m: continue
+    for cp,m in cam_entries:
         seg=int(m.group(1)); raw_k=int(m.group(2))
         k=slot_by_cam.get(raw_k, raw_k)
-        if k>len(SLOTS): continue
+        if k<1 or k>len(slots): continue
         w,h = [int(x) for x in probe(cp,"stream=width,height")[:2]]
         cdur=dur(cp); s_end=seg+cdur
-        fw,fh=fit(w,h,SLOTW,SLOTH)
-        sx,sy=SLOTS[k-1]
-        cx=sx+(SLOTW-fw)//2; cy=sy+(SLOTH-fh)//2
+        sx,sy,slotw,sloth=slots[k-1]
+        fw,fh=fit(w,h,slotw,sloth)
+        cx=sx+(slotw-fw)//2; cy=sy+(sloth-fh)//2
         ci=add_in("-i",cp)
         en=f"between(t,{seg},{s_end:.2f})"
         # Carte blanche à la taille EXACTE du slot : si la caméra n'a pas le
@@ -475,9 +488,9 @@ def render(nn):
         # couvertes sont comblées en blanc au lieu de laisser voir le fond.
         # Ombre portée douce autour de la carte (et non de la vidéo) pour un
         # rendu uniforme quel que soit le format de la caméra.
-        fc.append(f"color=c=#00000000:s={SLOTW+32}x{SLOTH+32}:r=30,format=rgba,"
-                  f"drawbox=x=16:y=16:w={SLOTW}:h={SLOTH}:color=black@0.5:t=fill,boxblur=10[sh{k}]")
-        fc.append(f"color=c=white:s={SLOTW}x{SLOTH}:r=30,setsar=1,format=yuv420p[card{k}]")
+        fc.append(f"color=c=#00000000:s={slotw+32}x{sloth+32}:r=30,format=rgba,"
+              f"drawbox=x=16:y=16:w={slotw}:h={sloth}:color=black@0.5:t=fill,boxblur=10[sh{k}]")
+        fc.append(f"color=c=white:s={slotw}x{sloth}:r=30,setsar=1,format=yuv420p[card{k}]")
         fc.append(f"[{ci}:v]scale={fw}:{fh},setsar=1,setpts=PTS+{seg}/TB[cam{k}]")
         fc.append(f"[{cur}][sh{k}]overlay={sx-12}:{sy-8}:enable='{en}':shortest=0[m{step}]"); cur=f"m{step}"; step+=1
         fc.append(f"[{cur}][card{k}]overlay={sx}:{sy}:enable='{en}':shortest=0[m{step}]"); cur=f"m{step}"; step+=1
@@ -507,7 +520,7 @@ def render(nn):
         out_name = re.sub(r"\.mp4$", ".preview.mp4", out_name)
     out=f"{od}/{out_name}"
     AENC, aenc_label = audio_encoder(webcam)
-    print(f"[{nn}] composition ({bdur:.0f}s, {len(cams)} caméra(s)"
+    print(f"[{nn}] composition ({bdur:.0f}s, {len(cam_ids)} caméra(s), layout {layout_mode} [{layout_mode_source}]"
           f"{' + diapos' if have_slides else ''}{' + deskshare' if have_ds else ''}"
           f"{' + nom' if nom else ''}{' + priorité cams' if webcams_priority else ''}, intro 0-{INTRO_DUR}s"
           f"{' (générée)' if intro_generated else ''}, encodeur {VENC_NAME}{' strict' if STRICT_HW else ''}"

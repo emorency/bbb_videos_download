@@ -5,7 +5,7 @@ session unique — en **clips par présentation**, puis, si on le souhaite, en
 **vidéo finale composée** (fond + diapos/deskshare + caméras isolées + nom +
 logo) selon un [gabarit 1920×1080][gabarit].
 
-[gabarit]: https://claude.ai/code/artifact/0d9616f0-de4b-4538-ba85-97faa8e9ea14
+[gabarit]: docs/layout.md
 
 > **Pressé ?** [COOKBOOK.md](COOKBOOK.md) donne le parcours complet en cinq
 > commandes, les recettes par situation et un tableau de dépannage. Ce
@@ -74,8 +74,7 @@ Cela télécharge dans `<dossier>` :
 - `NN/slideN.svg` (les diapos, un **dossier numéroté** — `01`, `02`… — par
   présentation, dans l'ordre de la session)
 
-puis génère **`presentations_cut.yaml`** (et `presentations_cut.txt` pour
-compatibilité).
+puis génère **`presentations_cut.yaml`**.
 
 ### Éditer les points de coupe
 
@@ -88,6 +87,39 @@ naming (`brand`, `city`, `date`, `language`, `format`, `encoding`) ainsi qu'un
 champ `recording_id:` rappelant l'ID BBB (pour pouvoir relancer `bbb_download.sh`
 ou `bbb_all.sh` sans le repasser en argument). La `date` est déduite du dossier
 d'enregistrement (ou du timestamp BBB), puis convertie en `YYYYMMDD`.
+Si une présentation a une grille webcam fixe différente de l'auto-détection,
+ajoutez `webcams_grid: "RxC"` (ex: `"2x3"` = 2 rangées, 3 colonnes) dans son
+entrée YAML.
+Vous pouvez aussi donner directement le nombre de webcams (`"1"`, `"2"`,
+`"3"`, `"4"`, `"6"`) ; il est converti en grille égale
+(`1->1x1`, `2->1x2`, `3->1x3`, `4->2x2`, `6->2x3`).
+Si la grille change pendant la présentation, utilisez `webcams_plan` sous forme
+structurée:
+
+```yaml
+webcams_plan:
+  - start: "0:00"
+    end: "12:30"
+    grid: "2x3"
+    active: [1, 2, 3, 4, 5]
+  - start: "12:30"
+    end: "end"
+    grid: "2x2"
+    active: [1, 2, 3]
+```
+
+Les horodatages de `webcams_plan` sont sur la timeline de la présentation
+(`start`/`end` de l'entrée), donc vous pouvez réutiliser les mêmes repères
+absolus que dans `presentations_cut.yaml`. Le script convertit ensuite en
+relatif pour le clip en interne.
+
+`end` est optionnel en YAML structuré:
+
+- si absent, la fin du segment est le `start` du segment suivant;
+- pour le dernier segment, si `end` est absent, la fin est `end` (fin du clip).
+
+Le format historique en chaîne (`"start end grid active [bbox]; ..."`) reste
+accepté, mais le format structuré est recommandé.
 
 Exemple YAML :
 
@@ -129,8 +161,6 @@ Exemple :
 Le `presenter` reste affiché en **nom complet** dans la vidéo, mais dans le
 nom de fichier il est converti en `Prenom` + initiale du dernier nom.
 Exemple : `Martial Bigras` devient `MartialB`.
-
-`presentations_cut.txt` reste accepté pour compatibilité.
 
 ```text
 # NUM | DEBUT    | FIN      | NOM                  | INFO
@@ -194,8 +224,7 @@ présentation d'origine pour que les diapos soient correctes.)
     -show_entries frame=pts_time -of csv=p=0 -read_intervals "%+60" webcams.mp4
   ```
 
-- Les `NUM` correspondent au champ `num` de `presentations_cut.yaml`
-  (ou à la colonne `NUM` du `.txt`).
+- Les `NUM` correspondent au champ `num` de `presentations_cut.yaml`.
   Sans liste, toutes les présentations sont traitées.
 
 Résultat dans `<dossier>/output/` :
@@ -220,6 +249,11 @@ une vidéo à partir de clips qui ne correspondent plus.
 Relancer une présentation ne met à jour que son dossier et sa ligne dans
 `manifest.txt` ; les autres ne sont pas touchées.
 
+Si vous voulez préparer l'intro avant le pipeline complet, lancez d'abord
+`./bbb_init.sh <recording_id>` : le script crée les dossiers `NN/` et
+`output/NN/` ainsi qu'un `presentations_cut.yaml` de base, ce qui vous permet
+de copier `intro.jpg` au bon endroit avant `bbb_all.sh`.
+
 ### PHASE 2b — Isoler les caméras (optionnel)
 
 BBB fusionne toutes les webcams en une grille dans `webcam.mp4`, sans métadonnée
@@ -227,6 +261,20 @@ de disposition. Pour en extraire des flux caméra séparés :
 
 ```bash
 ./bbb_split_webcams.sh <dossier> NUM...      # ex : ... 2026-07-07 02
+
+# v3 : version plus robuste (OpenCV), meilleure détection des transitions
+# de grille et des cams actives.
+./bbb_split_webcams_v3.sh <dossier> NUM...
+APPLY=1 ./bbb_split_webcams_v3.sh <dossier> 01
+# mode hybride: OpenCV propose, l'utilisateur confirme/édite chaque segment
+REVIEW=1 APPLY=1 SPLIT=1 ./bbb_split_webcams_v3.sh <dossier> 01
+# revue sélective: ne demander que les segments changés ou peu fiables
+REVIEW=1 REVIEW_MODE=smart REVIEW_CONFIDENCE=0.62 APPLY=1 SPLIT=1 ./bbb_split_webcams_v3.sh <dossier> 01
+
+# GUI locale Qt (cockpit complet: phases + metadata + revue segments)
+python3 bbb_webcams_plan_gui_qt.py <dossier> <NUM>
+# ex:
+python3 bbb_webcams_plan_gui_qt.py 2026-08-04 01
 
 # si la grille est connue (bypass de l'analyse auto)
 FORCE_GRID=2x2 FORCE_ACTIVE=1,2,3 ./bbb_split_webcams.sh <dossier> 01
@@ -239,14 +287,47 @@ MANUAL_PLAN=webcams_plan.txt ./bbb_split_webcams.sh <dossier> 01
 - Détection par image : boîte de contenu sur le fond blanc + coupures aux
   divisions égales de la grille (chute de corrélation), plages de disposition
   stable segmentées, chaque caméra active découpée.
-- Sortie : `output/NN/webcams/segSSSs_camK-of-N.mp4` (**max 3 caméras**, ratio de
-  cellule conservé). `STEP=<s>` change le pas d'échantillonnage (défaut 4 s).
+- La v3 utilise OpenCV si disponible (`pip3 install opencv-python`) pour une
+  analyse plus robuste des séparations de grille. Variables utiles :
+  `DETECTOR=opencv|classic|auto` et `CV2_REQUIRED=1`.
+- Pour une validation humaine assistée: `REVIEW=1` lance une revue interactive
+  segment par segment (grille, ordre des webcams actives, bbox). Avec
+  `REVIEW_IMAGES=1` (défaut), une image de référence est extraite pour chaque
+  segment dans `output/NN/webcams/review_plan/`.
+- `REVIEW_MODE` permet de filtrer les prompts: `all`, `changed`, `low`,
+  `smart` (changed + low confidence). En mode `changed`, la revue vise surtout
+  les segments de transition (changements de grille et micro-segments).
+  Le seuil de confiance se règle avec
+  `REVIEW_CONFIDENCE` (défaut `0.62`).
+- `REVIEW_LONG_SEGMENT_SEC` (défaut `120`) permet d'ignorer en revue `changed`
+  les longs segments stables à haute confiance.
+- `REVIEW_STRICT=1` force un échec si la review interactive est demandée sans
+  terminal interactif (`/dev/tty` indisponible). Par défaut (`0`), ces segments
+  sont auto-acceptés.
+- L'outil GUI Qt `bbb_webcams_plan_gui_qt.py` agit comme un cockpit:
+  statut des phases, boutons d'exécution (`make_clips`, auto-plan v3, split,
+  review webcams, compose), édition des champs YAML (start/end/presenter/
+  short_title/info), revue visuelle des segments et sauvegarde d'un
+  `webcams_plan.manual.txt`.
+- La liste de grilles proposée dans la GUI couvre: `1x1`, `1x2`, `1x3`, `2x1`,
+  `2x2`, `2x3`, `3x1`, `3x2`, `3x3`, avec saisie personnalisée possible
+  (`RxC`).
+- Sortie : `output/NN/webcams/segSSSs_camK-of-N.mp4` (ratio de cellule
+  conservé). `STEP=<s>` change le pas d'échantillonnage (défaut 4 s).
 - `VERBOSE=1` affiche la progression détaillée.
 - `BBB_VENC=libx264` force explicitement `libx264` sur les phases 2, 2b et 3.
 - En phase 2b, `VIDEO_CODEC=...` reste accepté comme alias de compatibilité,
   mais `BBB_VENC` est désormais la variable recommandée.
 - Sans variable, la phase 2b essaie `h264_videotoolbox`, puis bascule
   automatiquement sur `libx264` si l'encodeur matériel n'est pas disponible.
+- Pour forcer une grille webcam fixe d'une présentation, ajoutez
+  `webcams_grid: "RxC"` (ex: `"2x3"` = 2 rangées, 3 colonnes) dans son entrée
+  YAML.
+- Raccourci accepté : un simple nombre (`1`, `2`, `3`, `4`, `6`) pour une
+  grille égale correspondante.
+- Pour des changements de grille en cours de présentation, ajoutez
+  `webcams_plan` en YAML structuré (`start`, `end`, `grid`, `active`,
+  `bbox` optionnel).
 - Sur Debian et plus généralement sur Linux, `h264_videotoolbox` n'existe pas :
   utilisez `BBB_VENC=libx264` pour éviter l'avertissement, ou laissez le
   fallback automatique faire la bascule.
@@ -263,7 +344,7 @@ MANUAL_PLAN=webcams_plan.txt ./bbb_split_webcams.sh <dossier> 01
 ```
 
 `start`/`end` acceptent secondes, `MM:SS`, `HH:MM:SS` ou `end`. `active` liste
-les cellules ligne par ligne (`1..C*R`) ; utilisez `-` ou `all` pour toutes les
+les cellules ligne par ligne (`1..R*C`) ; utilisez `-` ou `all` pour toutes les
 cellules. `bbox` est optionnel et recadre la zone de grille (`x:y:w:h`).
 `MANUAL_PLAN=splits.txt` cherche aussi `output/NN/splits.txt`. Variante sans
 fichier : `MANUAL_SEGMENTS='0:00 3:20 2x2 1,2,3; 3:20 end 3x2 1,3,4,5'`.
@@ -327,7 +408,13 @@ Assemble, par présentation, la vidéo finale selon le [gabarit][gabarit] :
   **L'un des deux suffit** : une présentation sans diapos (partage d'écran
   seulement) se compose normalement, et inversement ;
 - **caméras** isolées (phase 2b) dans des emplacements fixes 16:9 avec ombre
-  portée, affichées seulement quand elles ont une image ;
+  portée, affichées seulement quand elles ont une image ; layout fixe
+  (voir [gabarit][gabarit]) :
+  - 3 slots verticaux à droite (layout historique) ;
+  - 1 slot additionnel en bas à droite, à gauche du logo et sous la zone
+    deskshare/slides ;
+  - `webcams_priority` continue de piloter l'affectation caméra -> slot
+    (jusqu'à 4 slots).
 - **nom** du présentateur (colonne `NOM`) en bas à gauche ;
 - **logo** `assets/Tux-FleurDeLys-…png` en bas à droite.
 
@@ -350,6 +437,9 @@ distinct `…​.preview.mp4`, jamais confondu avec la vidéo finale. `PYTHON=<c
 impose un interpréteur (utile si le `python3` par défaut n'a pas Pillow). Les
 assets (fond, logo) doivent être dans `assets/`.
 
+Pour accélérer encore un aperçu, vous pouvez baisser la qualité d'encodage :
+`COMPOSE_CRF=33 COMPOSE_PRESET=ultrafast COMPOSE_BITRATE=1800k`.
+
 ### Tout-en-un : de l'ID à la vidéo finale (`bbb_all.sh`)
 
 Après avoir **visionné l'enregistrement et noté les points de coupe**, préparez
@@ -359,6 +449,8 @@ alors **tout le pipeline** — téléchargement (phase 1) puis clips, caméras e
 composition (phases 2/2b/3) — pour toutes les présentations du config :
 
 ```bash
+./bbb_all.sh --preview <config.yaml> [NUM...]              # aperçu rapide (~10s/section)
+./bbb_all.sh --preview <meeting_id | playback_url> <config.yaml> [NUM...]
 ./bbb_all.sh <config.yaml> [NUM...]                        # id lu dans le config
 ./bbb_all.sh <meeting_id | playback_url> <config.yaml> [NUM...]
 ./bbb_all.sh rlq-20260715.yaml
@@ -375,16 +467,37 @@ composition (phases 2/2b/3) — pour toutes les présentations du config :
   seulement celles listées.
 - La seule étape manuelle reste le **repérage des coupes** : le config les porte,
   le script fait le reste.
+- `--preview` (ou `PREVIEW=1`) active un rendu d'essai rapide :
+  `MODE=copy`, `CLIP_LIMIT=10`, `COMPOSE_LIMIT=10`, encodage allégé
+  (`COMPOSE_CRF=33`, `COMPOSE_PRESET=ultrafast`, `COMPOSE_BITRATE=1800k`),
+  et échantillonnage webcam plus espacé (`STEP=8`).
+- En preview, chaque cut prend 10 s puis est assemblé automatiquement dans
+  `output/preview-assembled.mp4` (`PREVIEW_ASSEMBLE=0` pour désactiver).
+- Si vous lancez preview avec un seul `NUM` qui contient `webcams_plan`, le mode
+  preview prend 10 s de chaque entrée de `webcams_plan` puis assemble le tout
+  (désactiver via `PREVIEW_FROM_WEBCAMS_PLAN=0`).
 - `MODE=copy` passe la phase 2 en copie ; `SKIP_SPLIT=1` saute la 2b (pas de
   caméras isolées) ; `SKIP_COMPOSE=1` s'arrête après les clips. Les variables des
   scripts sous-jacents (`PYTHON`, `BBB_HOST`, `BBB_VENC`, …) sont héritées.
+- Review webcams avant composition (optionnel) :
+
+  ```bash
+  REVIEW_WEBCAMS=1 ./bbb_all.sh <config.yaml> 01
+  REVIEW_WEBCAMS=1 REVIEW_WEBCAMS_PAUSE=1 ./bbb_all.sh <config.yaml> 01
+  ```
+
+  Cela génère, pour chaque `NUM`, `output/NUM/webcams/review/contact-sheet.jpg`
+  et `output/NUM/webcams/review/webcams-review.mp4`.
+  Avec `REVIEW_WEBCAMS_PAUSE=1`, le pipeline s'arrête après la review webcam
+  (avant la phase 3), pour validation manuelle.
 
 ## Scripts
 
 | Script | Rôle |
 | -------- | ------ |
 | `bbb_all.sh` | Tout-en-un : télécharge (phase 1) puis clips/caméras/composition (2/2b/3) à partir d'un ID + un config de coupes. |
-| `bbb_download.sh` | **Phase 1** : télécharge tout + génère `presentations_cut.yaml` (et `.txt` de compatibilité). |
+| `bbb_init.sh` | Prépare un dossier de session, crée `output/NN/` et génère un `presentations_cut.yaml` de base. |
+| `bbb_download.sh` | **Phase 1** : télécharge tout + génère `presentations_cut.yaml`. |
 | `bbb_make_clips.sh` | **Phase 2** : génère les clips alignés par présentation (webcam / deskshare / slides). |
 | `bbb_split_webcams.sh` | **Phase 2b** : isole les caméras de `webcam.mp4` par détection d'image. |
 | `bbb_recut_sync.sh` | Re-coupe toutes les pistes d'une présentation à l'identique (retrait tête ou segment milieu, fondu optionnel) ; synchro conservée. |
@@ -417,7 +530,7 @@ Le dépôt ne versionne que les scripts et cette doc. Tout le contenu produit pa
 les scripts reste **local** (voir `.gitignore`) :
 
 - les dossiers d'enregistrement datés (`2026-07-07/`…) avec `webcams.mp4`,
-  `deskshare.mp4`, les diapos, les métadonnées et `presentations_cut.txt` ;
+  `deskshare.mp4`, les diapos, les métadonnées et `presentations_cut.yaml` ;
 - les clips et les vidéos finales générés dans `output/`.
 
 Chaque enregistrement se retélécharge avec `bbb_download.sh` et se régénère avec

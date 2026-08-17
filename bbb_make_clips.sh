@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # PHASE 2 — Génère les clips par présentation à importer dans un logiciel de
-# montage vidéo, à partir des points de coupe édités dans presentations_cut.yaml
-# (ou presentations_cut.txt pour compatibilité).
+# montage vidéo, à partir des points de coupe édités dans presentations_cut.yaml.
 #
-# Pour chaque entrée (NUM) de presentations_cut.yaml/.txt :
+# Pour chaque entrée (NUM) de presentations_cut.yaml :
 #   output/NUM/webcam.mp4     (caméra + audio)
 #   output/NUM/deskshare.mp4  (partage d'écran, si présent)
 #   output/NUM/slides.mp4     (diapos rendues sur la timeline shapes.svg)
@@ -13,7 +12,7 @@
 # était à l'écran).
 #
 # SCINDER une présentation : webcam et deskshare sont coupés PAR LE TEMPS, donc
-# il suffit d'ajouter une entrée dans presentations_cut.yaml (ou ligne dans .txt)
+# il suffit d'ajouter une entrée dans presentations_cut.yaml
 # avec un NUM unique et
 # une sous-plage [DEBUT, FIN]. Les diapos sont rendues depuis la timeline
 # shapes.svg complète, donc une coupe peut traverser un changement de deck.
@@ -27,6 +26,7 @@
 #   NUM...  : NUM de ligne à traiter (défaut: toutes). Accepte "5" ou "05".
 #             ex: bbb_make_clips.sh 2026-07-07 encode 3
 #                 bbb_make_clips.sh 2026-07-07 5 6      (mode encode implicite)
+#   CLIP_LIMIT=<s> : tronque chaque section à <s> secondes (aperçu rapide).
 
 set -euo pipefail
 
@@ -42,10 +42,10 @@ fi
 wanted=" $* "   # liste des NUM demandés (vide = toutes)
 VENC="${BBB_VENC:-h264_videotoolbox}"
 STRICT_HW="${BBB_STRICT_HW:-0}"
+CLIP_LIMIT="${CLIP_LIMIT:-}"
 cd "$rec_dir"
 
 cutfile_yaml="presentations_cut.yaml"
-cutfile_txt="presentations_cut.txt"
 cutfile=""
 tmp_cut=""
 
@@ -125,10 +125,8 @@ for e in entries:
   print(f"{e['num']}|{e['start']}|{e['end']}|{e['presenter']}|{e['info']}|{e['webcams_priority']}")
 PY
   cutfile="$tmp_cut"
-elif [ -f "$cutfile_txt" ]; then
-  cutfile="$cutfile_txt"
 else
-  echo "Erreur: presentations_cut.yaml ou presentations_cut.txt introuvable dans $(pwd)." >&2
+  echo "Erreur: presentations_cut.yaml introuvable dans $(pwd)." >&2
   exit 1
 fi
 
@@ -290,6 +288,7 @@ mkdir -p output
 [ -f output/manifest.txt ] || : > output/manifest.txt
 log "Mode: $mode"
 log "Encodeur vidéo: $VENC$([ "$STRICT_HW" = "1" ] && printf ' (strict)')"
+[ -n "$CLIP_LIMIT" ] && log "Limite preview par section: ${CLIP_LIMIT}s"
 [ -n "${wanted// /}" ] && log "Présentations demandées:${wanted}" || log "Présentations: toutes"
 
 while IFS='|' read -r num start end nom info webcams_priority; do
@@ -307,6 +306,11 @@ while IFS='|' read -r num start end nom info webcams_priority; do
 
   ss="$(to_sec "$start")"; ee="$(to_sec "$end")"
   dur="$(awk -v a="$ss" -v b="$ee" 'BEGIN{printf "%.3f", b-a}')"
+  # Rendu d'essai rapide : tronque chaque section à CLIP_LIMIT secondes.
+  if [ -n "$CLIP_LIMIT" ]; then
+    dur="$(awk -v d="$dur" -v lim="$CLIP_LIMIT" 'BEGIN{if(lim+0<d) printf "%.3f", lim+0; else printf "%.3f", d+0}')"
+    ee="$(awk -v a="$ss" -v d="$dur" 'BEGIN{printf "%.3f", a+d}')"
+  fi
   nn="$num"                       # le NUM sert de nom de dossier de sortie
   outdir="output/${nn}"
   mkdir -p "$outdir"
