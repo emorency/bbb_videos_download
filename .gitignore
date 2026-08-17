@@ -9,9 +9,11 @@
 # Globs pour que tout nouveau script/doc soit versionné automatiquement.
 !/.gitignore
 !/*.md
+!/*.yaml
 !/bbb_*.sh
 !/*.py
-!/assets/*
+!/assets/**
+!/docs/**
 
 # Filet de sécurité si des médias/outputs se retrouvaient hors d'un dossier daté
 output/
